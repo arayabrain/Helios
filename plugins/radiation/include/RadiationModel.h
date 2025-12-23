@@ -2239,6 +2239,14 @@ protected:
      */
     void buildGeometryData();
 
+    //! Extract texture mask and UV data for all primitives
+    /**
+     * Iterates through primitives with transparency textures, extracts mask data
+     * and UV coordinates, and populates the texture-related fields in geometry_data.
+     * Called internally by buildGeometryData().
+     */
+    void buildTextureData();
+
     //! Build UUID-to-array-position mapping from geometry_data
     //! Must be called after buildGeometryData() and before buildMaterialData()
     void buildUUIDMapping();

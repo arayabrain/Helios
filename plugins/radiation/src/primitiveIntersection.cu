@@ -35,7 +35,10 @@ RT_PROGRAM void rectangle_intersect(int objID /**< [in] index of primitive in ge
 
     if (prd.origin_UUID == patch_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[patch_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[patch_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -67,7 +70,9 @@ RT_PROGRAM void rectangle_intersect(int objID /**< [in] index of primitive in ge
 
                 uint U = patch_UUID[objID];
 
-                uint ID = objectID[U];
+                // FIX: Convert UUID to position using primitive_positions lookup
+                // objectID is position-indexed, not UUID-indexed
+                uint ID = primitive_positions[U];
 
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {
@@ -128,7 +133,10 @@ RT_PROGRAM void triangle_intersect(int objID /**< [in] index of primitive in geo
 
     if (prd.origin_UUID == triangle_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[triangle_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[triangle_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -163,7 +171,8 @@ RT_PROGRAM void triangle_intersect(int objID /**< [in] index of primitive in geo
 
                 uint U = triangle_UUID[objID];
 
-                uint ID = objectID[U];
+                // FIX: Convert UUID to position using primitive_positions lookup
+                uint ID = primitive_positions[U];
 
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {
@@ -217,7 +226,10 @@ RT_PROGRAM void disk_intersect(int objID /**< [in] index of primitive in geometr
 
     if (prd.origin_UUID == disk_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[disk_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[disk_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -259,7 +271,10 @@ RT_PROGRAM void voxel_intersect(int objID /**< [in] index of primitive in geomet
 
     if (prd.origin_UUID == voxel_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[voxel_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[voxel_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -355,7 +370,10 @@ RT_PROGRAM void bbox_intersect(int objID /**< [in] index of primitive in geometr
 
     if (prd.origin_UUID == bbox_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[bbox_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[bbox_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -415,7 +433,10 @@ RT_PROGRAM void tile_intersect(int objID /**< [in] index of primitive in geometr
 
     if (prd.origin_UUID == tile_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
-    } else if (twosided_flag[tile_UUID[objID]] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
+    }
+    // FIX: Convert UUID to position for twosided_flag access
+    uint position = primitive_positions[tile_UUID[objID]];
+    if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
 
@@ -451,7 +472,8 @@ RT_PROGRAM void tile_intersect(int objID /**< [in] index of primitive in geometr
 
                 uint U = tile_UUID[objID];
 
-                uint ID = objectID[U];
+                // FIX: Convert UUID to position using primitive_positions lookup
+                uint ID = primitive_positions[U];
 
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {

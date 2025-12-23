@@ -220,6 +220,15 @@ public:
     virtual void uploadRadiationOut(const std::vector<float>& radiation_out_top,
                                      const std::vector<float>& radiation_out_bottom) = 0;
 
+    /**
+     * @brief Upload source flux values for launched bands
+     *
+     * @param[in] fluxes Source flux values indexed by [source * Nbands_launch + band]
+     *
+     * Used to set per-band source fluxes before direct ray launch.
+     */
+    virtual void uploadSourceFluxes(const std::vector<float>& fluxes) = 0;
+
     // ========== Diagnostics ==========
 
     /**

@@ -109,6 +109,7 @@ public:
     void copyScatterToRadiation() override;
     void uploadRadiationOut(const std::vector<float>& radiation_out_top,
                             const std::vector<float>& radiation_out_bottom) override;
+    void uploadSourceFluxes(const std::vector<float>& fluxes) override;
 
     // Diagnostics
     void queryGPUMemory() const override;

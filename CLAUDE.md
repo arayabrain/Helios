@@ -75,18 +75,43 @@
    - Builds in Release mode by default (use `--debugbuild` for Debug mode)
 
 ### Test Workflow
-1. **Running Tests** (from `utilities/` directory):
+
+**CRITICAL DEBUGGING REQUIREMENTS:**
+When investigating test failures, you MUST:
+1. **ALWAYS use `--verbose`** - Without it, you won't see doctest output explaining why tests failed
+2. **ALWAYS use `--project-dir <name>`** - Recompiling from scratch wastes minutes per iteration
+3. **ALWAYS clean up with `rm -rf <project_dir>`** - Don't leave persistent directories behind
+
+### Running Tests - Quick Reference
+
+1. **First-Time / Exploratory Testing**:
     ```bash
+    cd utilities
     ./run_tests.sh                              # Run all tests
     ./run_tests.sh --test photosynthesis        # Run single plugin test
     ./run_tests.sh --tests "radiation,lidar"    # Run multiple plugin tests
-    ./run_tests.sh --test context               # Run core context tests
+    ./run_tests.sh --nogpu                      # Run only non-GPU tests
     ```
-   
-When debugging, it is recommended to use the --verbose option to see the full build output, which can help identify issues.
-It is also recommended when debugging to build to a persistent project directory using the `--project-dir` option, which allows you to reuse the build artifacts and avoid recompilation from scratch on subsequent runs.
 
-2. **Advanced Test Options**:
+2. **Debugging Test Failures (THE RIGHT WAY)**:
+    ```bash
+    # Initial run - creates persistent project
+    ./run_tests.sh --project-dir debug_proj --test energybalance --verbose
+
+    # See what failed? Fix code, then rerun (5-10x faster!)
+    ./run_tests.sh --project-dir debug_proj --test energybalance --verbose
+
+    # List specific test cases
+    ./run_tests.sh --project-dir debug_proj --doctestargs "--list-test-cases"
+
+    # Run just one failing test case
+    ./run_tests.sh --project-dir debug_proj --testcase "MyFailingTest" --verbose
+
+    # CRITICAL: Clean up when done
+    rm -rf debug_proj
+    ```
+
+3. **Advanced Test Options**:
     ```bash
     ./run_tests.sh --testcase "Test Name"       # Run specific doctest case
     ./run_tests.sh --doctestargs "--help"       # Pass args directly to doctest
@@ -98,46 +123,23 @@ It is also recommended when debugging to build to a persistent project directory
     ./run_tests.sh --project-dir my_project     # Use persistent project directory
     ```
 
-3. **Optimized Testing Workflow with Persistent Projects**:
-   For iterative testing and development, use `--project-dir` to avoid recompilation:
-    ```bash
-    # Initial setup - creates project and compiles from scratch
-    ./run_tests.sh --project-dir my_test_project --test photosynthesis
-    
-    # Subsequent runs are much faster (reuses compiled project)
-    ./run_tests.sh --project-dir my_test_project --doctestargs "--list-test-cases"
-    ./run_tests.sh --project-dir my_test_project --testcase "specific test name"
-    ./run_tests.sh --project-dir my_test_project --doctestargs "--help"
-    
-    # IMPORTANT: Clean up when done to avoid lingering directories
-    rm -rf my_test_project
-    
-    # Project directory persists after script completion for reuse
-    # Only libraries/changed files are recompiled on subsequent runs
-    ```
-   
-   **Benefits of Persistent Projects**:
-   - **Speed**: Subsequent runs are 5-10x faster (no library recompilation)
-   - **Efficiency**: Perfect for exploring test cases with `--list-test-cases` then running specific ones
-   - **Development**: Ideal for debugging specific tests or running different doctest arguments
-   - **Clean**: Still automatically cleans up temporary projects when `--project-dir` not used
-   - **CRITICAL**: **Always clean up persistent project directories when finished** - use `rm -rf project_name` to remove them
-
-4**Custom Tests**:
+4. **Custom Tests**:
     - It is sometimes necessary to write custom tests for specific functionality such as testing performance. In this case, add a custom project in `samples/`.
     - Follow the pattern of existing projects in `samples/` to create a new test project.
     - You can also use the `utilities/create_project.sh` script to automate creation of new projects.
     - Be sure to clean up the files after you are done.
 
-5**Common Build Issues**:
+5. **Common Build Issues**:
     - Always check compilation errors carefully for missing includes or function signature mismatches
     - Plugin tests may have different data label expectations than actual implementation (verify against source code)
     - Tests failing with "does not exist" errors usually indicate incorrect data labels in tests
 
-6**Assessing Success/Failure**:
-   - Always check for error/warning messages first before declaring success 
+6. **Assessing Success/Failure**:
+   - **If a test fails, you MUST rerun with `--verbose` to see the actual doctest error messages**
+   - Without --verbose, you only see "failed" but not WHY it failed
+   - Always check for error/warning messages first before declaring success
    - Look for specific failure indicators like "WARNING", "ERROR", "FAILED"
-   - Follow the "Don't be too agreeable" principle - be critical and thorough 
+   - Follow the "Don't be too agreeable" principle - be critical and thorough
    - Stop and analyze failures instead of proceeding when things are clearly broken
    - All tests should be passing before considering the implementation complete. 100% success rate is the only acceptable outcome.
 
@@ -174,6 +176,24 @@ It is also recommended when debugging to build to a persistent project directory
 - When plugin tests fail, first check if the test expectations match the actual implementation
 - Always verify test expectations against the source code in `plugins/[name]/src/`
 - Tests should not write any errors messages to std::cerr. Use the struct `capture_cerr` (defined in `core/include/global.h`) to capture any error messages and check them in the test. There is a similar method `capture_cout` if needed.
+- **CRITICAL: Doctest Output Scoping** - Always ensure `capture_cout` and `capture_cerr` objects go out of scope BEFORE `DOCTEST_CHECK` assertions:
+  ```cpp
+  // ❌ WRONG - capture remains in scope during assertions
+  capture_cout capture;
+  model.run();
+  std::string output = capture.get_captured_output();
+  DOCTEST_CHECK(output.find("something") != std::string::npos);  // doctest failure output will be captured!
+
+  // ✅ CORRECT - capture destroyed before assertions
+  std::string output;
+  {
+      capture_cout capture;
+      model.run();
+      output = capture.get_captured_output();
+  }  // capture destroyed here
+  DOCTEST_CHECK(output.find("something") != std::string::npos);  // doctest failure output prints correctly
+  ```
+  If a capture object is in scope during assertions, doctest's failure messages will be captured instead of displayed, making debugging impossible.
 - Make sure that any functions marked `[[nodiscard]]` assign their return value to a variable in the test, otherwise the compiler will issue a warning.
 - **Plugin `selfTest.cpp` files must include `#define DOCTEST_CONFIG_IMPLEMENT` before including `doctest.h`** - without this, doctest will auto-discover ALL tests linked into the binary (including core tests), causing the plugin to run hundreds of unrelated tests instead of just its own.
 
@@ -195,32 +215,211 @@ It is also recommended when debugging to build to a persistent project directory
 - Purpose: persist structured facts and relationships about this repo, projects, and collaborators using the knowledge-graph memory tools.
 - Safety: summarize what you plan to store before writing; do not store secrets or API keys.
 
+### **CRITICAL: How MCP Search Actually Works**
+
+MCP memory uses **simple case-insensitive substring matching** - NOT semantic search or AI understanding. It searches for your query string within entity names, types, and observations using basic `toLowerCase().includes()`.
+
+**Key Implications:**
+- Query "test crash" searches for the EXACT phrase "test crash" as a substring
+- Query "radiation model plugin error" WON'T match unless that exact phrase exists
+- NO fuzzy matching, NO synonyms, NO semantic understanding
+- Case-insensitive: "Test" finds "test", "TEST", "testing"
+- Substring matching: "photo" finds "photosynthesis", "photography"
+
+### Search Strategy (MANDATORY)
+
+**✅ GOOD Query Patterns:**
+```python
+# Single keyword queries work best
+mcp__memory__search_nodes(query="radiation")
+mcp__memory__search_nodes(query="photosynthesis")
+mcp__memory__search_nodes(query="cmake")
+
+# Short phrases that appear verbatim
+mcp__memory__search_nodes(query="energy balance")
+mcp__memory__search_nodes(query="test failure")
+
+# Word stems for broader matching
+mcp__memory__search_nodes(query="photo")  # finds "photosynthesis", "photorespiration"
+mcp__memory__search_nodes(query="optim")  # finds "optimization", "optimizer"
+```
+
+**❌ BAD Query Patterns:**
+```python
+# Complex multi-term queries (searches for EXACT phrase)
+mcp__memory__search_nodes(query="radiation model plugin GPU acceleration error fix")
+
+# Natural language questions (no semantic understanding)
+mcp__memory__search_nodes(query="why does the photosynthesis model crash?")
+
+# Multiple disconnected concepts (won't match unless exact phrase exists)
+mcp__memory__search_nodes(query="CMake build shader compilation OptiX")
+```
+
+**Query Refinement Strategy:**
+1. **Start broad, then narrow**: "plugin" → "radiation" → "radiation GPU" → "radiation optix"
+2. **Use word stems**: "photo" instead of "photosynthesis", "optim" instead of "optimization"
+3. **Multiple simple searches** over one complex search: Do 3 searches with ["radiation", "GPU", "crash"] instead of one "radiation plugin GPU crash error"
+4. **Search by entity type**: "technical_issue", "solution", "bug_fix"
+
 ### When to write memory
 Trigger a write when any of the following occur:
 1. A new project, module, or dataset is introduced.
 2. A design decision or convention is finalized.
-3. A collaborator’s role, preference, or responsibility is clarified.
+3. A collaborator's role, preference, or responsibility is clarified.
+4. A technical issue is discovered and solved.
+5. A plugin implementation pattern or architectural insight is learned.
+6. Build system or test infrastructure changes are made.
 
 ### How to write memory
-Use the server’s tools rather than free-form text. Prefer the smallest useful graph entries.
 
-1. Create entities  
-   Run the MCP tool `create_entities` with fields `name`, `entityType`, and `observations`. Example:
-- “Create an entity for the library ‘Helios EnergyBalanceModel’ with observation summarizing the inputs, outputs, and key files.”
+**Entity Naming Standards (MANDATORY):**
+- Use underscores for multi-word names: `Radiation_Plugin`, `CMake_OptiX_Fix`, `Photosynthesis_Model`
+- Be specific but concise (3-5 words max): `radiation_optix_path_issue_2025_10`
+- Include dates for time-sensitive items: `cmake_fix_2025_10_06`
+- Use consistent casing: Choose `snake_case` or `CamelCase` and stick with it
+- Make names searchable: Include keywords you'd search for
 
-2. Add relations  
-   Run `create_relations` to connect entities. Example:
-- “Link ‘Helios EnergyBalanceModel’ to ‘SurfaceEnergyBalance’ with relationType ‘implements’.”
+**Atomic Observation Principle:**
+One observation = one fact. Break compound statements into separate observations.
 
-3. Update or annotate  
-   Use `append_observations` to add a brief dated note when behavior or conventions change.
+✅ **GOOD Observations:**
+```python
+observations = [
+    "Requires OptiX 7.3 or higher for GPU acceleration",
+    "CMake variable OPTIX_INCLUDE_DIR must be set",
+    "Fixed in commit abc123 on 2025-10-06",
+    "Located in plugins/radiation/src/RadiationModel.cpp",
+    "Bug affects only Windows builds with CUDA 11.8"
+]
+```
+
+❌ **BAD Observations:**
+```python
+observations = [
+    "Requires OptiX 7.3 or higher for GPU acceleration and CMake variable OPTIX_INCLUDE_DIR must be set, fixed in commit abc123 affecting only Windows with CUDA 11.8"
+]
+```
+
+**Recommended Entity Types for Helios:**
+- **Components**: `plugin`, `module`, `library`, `test_suite`
+- **Knowledge**: `technical_issue`, `solution`, `bug_fix`, `performance_fix`
+- **Process**: `build_pattern`, `test_pattern`, `cmake_pattern`
+- **Project**: `project`, `feature`, `dataset`, `experiment`
+
+**Creating Entities and Relations:**
+```python
+# 1. Create entities with atomic observations
+mcp__memory__create_entities(entities=[
+    {
+        "name": "Radiation_OptiX_Path_Issue",
+        "entityType": "technical_issue",
+        "observations": [
+            "OptiX include path not found on Windows builds",
+            "CMake looks in hardcoded Linux paths",
+            "Affects radiation plugin compilation",
+            "Discovered during Windows CI build 2025-10-06"
+        ]
+    }
+])
+
+# 2. Create meaningful relations
+mcp__memory__create_relations(relations=[
+    {
+        "from": "Radiation_OptiX_Path_Fix",
+        "to": "Radiation_OptiX_Path_Issue",
+        "relationType": "solves"
+    }
+])
+
+# 3. Update existing entities (use add_observations, NOT append_observations)
+mcp__memory__add_observations(observations=[
+    {
+        "entityName": "Radiation_OptiX_Path_Fix",
+        "contents": ["Verified working on Windows CI as of 2025-10-07"]
+    }
+])
+```
 
 ### When to read memory
-Before large refactors, onboarding explanations, or when the task mentions prior decisions, call `search_entities` or `search_relations` with a concise query, then cite what you found.
 
-### Usage examples
-- “Search memory for entities about ‘Helios’ and ‘stomatal conductance’ and summarize relevant observations.”
-- “Create entities for ‘GEMINI project’ (type: project) and ‘Nonpareil orchard dataset’ (type: dataset), then relate them with relationType ‘uses’.”
+**ALWAYS search before creating** to avoid duplicates:
+```python
+# Before creating new entity, search for existing
+results = mcp__memory__search_nodes(query="radiation")
+# If found, use add_observations to update
+# If not found, create new entity
+```
 
-### References inside prompts
-- To reference MCP resources or trigger tools, you can type `/mcp` in Claude Code to view available servers and tools, or mention the server by name in your instruction, e.g., “Using the `memory` server, run `search_entities` for ‘trellis’.” See Anthropic’s MCP guide for listing and managing servers. 
+**Search at session start** to gather context:
+```python
+# Use 2-3 keyword searches
+results1 = mcp__memory__search_nodes(query="radiation")
+results2 = mcp__memory__search_nodes(query="optix")
+results3 = mcp__memory__search_nodes(query="cmake")
+```
+
+**Use open_nodes when you know exact names:**
+```python
+entities = mcp__memory__open_nodes(names=[
+    "Radiation_Plugin_Architecture",
+    "CMake_OptiX_Configuration_Pattern"
+])
+```
+
+### Common Pitfalls and Solutions
+
+**Pitfall 1: Overly specific queries return nothing**
+- Problem: `search_nodes(query="radiation plugin fails with OptiX 7.3 on Windows 11")`
+- Solution: Break into separate searches: `search_nodes(query="radiation")`, `search_nodes(query="optix")`
+
+**Pitfall 2: Duplicate entities**
+- Problem: Creating `Radiation_Plugin`, `RadiationModel`, `radiation_model` separately
+- Solution: ALWAYS search before creating: `search_nodes(query="radiation")`
+
+**Pitfall 3: Generic entity names**
+- Problem: Entity named "bug_fix" is impossible to find among many bug fixes
+- Solution: Include distinctive identifiers: `radiation_optix_path_fix_2025_10`
+
+**Pitfall 4: Compound observations**
+- Problem: "Fixed OptiX path and updated CMake and added tests"
+- Solution: Break into atomic facts: ["Fixed OptiX include path detection", "Updated CMake FindOptiX module", "Added Windows CI test"]
+
+### Helios-Specific Memory Structure
+
+**Core Categories:**
+```python
+# Plugins (main focus)
+"Radiation_Plugin", "Photosynthesis_Plugin", "EnergyBalance_Plugin", "Visualizer_Plugin"
+
+# Technical challenges
+"cmake_optix_detection", "test_coverage_gap", "build_system_pattern"
+
+# Solutions and patterns
+"unified_test_system", "cmake_plugin_pattern", "fail_fast_error_handling"
+
+# Architecture
+"plugin_architecture", "context_primitive_system", "xml_parsing_framework"
+```
+
+**Relation Types to Use:**
+- `solves`, `fixes` (solution → problem)
+- `depends_on`, `requires` (component → dependency)
+- `implements`, `provides` (implementation → interface)
+- `part_of`, `contains` (child → parent)
+- `tested_by`, `validates` (code → test)
+
+### Quick Reference
+
+**Search Commands:**
+```python
+mcp__memory__search_nodes(query="keyword")           # Discovery search
+mcp__memory__open_nodes(names=["Entity_Name"])       # Specific retrieval
+mcp__memory__read_graph()                            # Export full graph
+```
+
+**When Search Returns Nothing:**
+1. Try shorter query (use word stem: "photo" not "photosynthesis")
+2. Try related keywords ("GPU" if "OptiX" fails)
+3. Search entity types: `search_nodes(query="technical_issue")`
+4. Use `read_graph()` to see all entities 
