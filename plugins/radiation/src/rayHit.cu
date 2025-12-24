@@ -33,6 +33,11 @@ RT_PROGRAM void closest_hit_direct() {
 
     uint hit_position = primitive_positions[UUID];
 
+    // Bounds check: skip if position is invalid
+    if (hit_position == UINT_MAX) {
+        return;
+    }
+
     if ((periodic_flag.x == 1 || periodic_flag.y == 1) && primitive_type[hit_position] == 5) { // periodic boundary condition
 
         prd.hit_periodic_boundary = true;
@@ -66,6 +71,11 @@ RT_PROGRAM void closest_hit_diffuse() {
     uint origin_UUID = prd.origin_UUID;
     uint origin_position = primitive_positions[origin_UUID];
     uint hit_position = primitive_positions[UUID];
+
+    // Bounds check: skip if positions are invalid
+    if (origin_position == UINT_MAX || hit_position == UINT_MAX) {
+        return;
+    }
 
     // Create indexers for buffer access
     RadiationBufferIndexer rad_indexer(Nprimitives, Nbands_launch);
@@ -245,6 +255,11 @@ RT_PROGRAM void closest_hit_camera() {
 
     // Convert UUID to array position
     uint hit_position = primitive_positions[UUID];
+
+    // Bounds check: skip if position is invalid
+    if (hit_position == UINT_MAX) {
+        return;
+    }
 
     // Create indexers
     RadiationBufferIndexer rad_indexer(Nprimitives, Nbands_launch);

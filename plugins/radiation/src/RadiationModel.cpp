@@ -6587,13 +6587,11 @@ void RadiationModel::buildGeometryData() {
     // Phase 1: Populate primitiveID for runBand() compatibility
     primitiveID = primitiveID_indices;
 
-    // For backend: primitiveID[objID] must return the actual context UUID
-    // Because CUDA computes: UUID = primitiveID[objID] + subpatch_offset
-    // And the geometry data is stored in reordered positions
-    std::vector<uint> primitiveID_for_backend(Nobjects);
-    for (size_t i = 0; i < Nobjects; i++) {
-        size_t prim_idx = primitiveID_indices[i];
-        primitiveID_for_backend[i] = primitive_UUIDs_ordered[prim_idx];
+    // For backend: primitiveID[position] must return the UUID for that primitive
+    // Sized by Nprimitives (all primitives including subpatches), not Nobjects (object entries only)
+    std::vector<uint> primitiveID_for_backend(Nprimitives);
+    for (size_t i = 0; i < Nprimitives; i++) {
+        primitiveID_for_backend[i] = primitive_UUIDs_ordered[i];
     }
 
     // Copy corrected primitiveID mapping to geometry_data for backend upload
@@ -6629,8 +6627,9 @@ void RadiationModel::buildGeometryData() {
             context->getObjectTransformationMatrix(parentID, m);
             memcpy(&geometry_data.transform_matrices[prim_idx * 16], m, 16 * sizeof(float));
 
-            helios::int2 subdiv = context->getTileObjectSubdivisionCount(parentID);
-            geometry_data.object_subdivisions[prim_idx] = subdiv;
+            // Individual tile subpatches should NOT be subdivided (they're already the result of subdivision)
+            // Only the parent tile geometry entry uses the subdivision count
+            geometry_data.object_subdivisions[prim_idx] = helios::make_int2(1, 1);
 
             // Only add ONE tile geometry entry per parent tile object (not per subpatch)
             // The tile intersection program handles subpatch selection internally
@@ -6736,10 +6735,6 @@ void RadiationModel::buildGeometryData() {
             uint UUID = geometry_data.primitive_UUIDs[i];
             geometry_data.primitive_positions[UUID] = i;  // Map UUID → array position
         }
-        std::cout << "POSITIONS DEBUG: max_UUID=" << max_UUID << " positions.size=" << geometry_data.primitive_positions.size() << std::endl;
-        std::cout << "POSITIONS DEBUG: UUIDs = ";
-        for (uint u : geometry_data.primitive_UUIDs) std::cout << u << " ";
-        std::cout << std::endl;
     }
 }
 
@@ -6747,8 +6742,6 @@ void RadiationModel::buildTextureData() {
     // Extract texture mask and UV data for all primitives with transparency textures
 
     size_t Nobjects = geometry_data.primitive_count;
-
-    std::cout << "TEXTURE DEBUG: buildTextureData called, Nobjects=" << Nobjects << std::endl;
 
     // Clear any previous texture data (important when updateGeometry is called multiple times)
     geometry_data.mask_data.clear();
@@ -6821,15 +6814,6 @@ void RadiationModel::buildTextureData() {
         }
         // If uvs is empty, uv_ID stays -1 and CUDA will use default UV mapping
     }
-
-    std::cout << "TEXTURE DEBUG: After processing - mask_data.size=" << geometry_data.mask_data.size()
-              << " mask_sizes.size=" << geometry_data.mask_sizes.size()
-              << " uv_data.size=" << geometry_data.uv_data.size() << std::endl;
-    int textured_count = 0;
-    for (size_t i = 0; i < geometry_data.mask_IDs.size(); i++) {
-        if (geometry_data.mask_IDs[i] >= 0) textured_count++;
-    }
-    std::cout << "TEXTURE DEBUG: Primitives with textures: " << textured_count << std::endl;
 }
 
 size_t RadiationModel::testBuildGeometryData() {

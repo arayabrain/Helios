@@ -74,6 +74,11 @@ RT_PROGRAM void rectangle_intersect(int objID /**< [in] index of primitive in ge
                 // objectID is position-indexed, not UUID-indexed
                 uint ID = primitive_positions[U];
 
+                // Skip if UUID maps to invalid position (e.g., deleted UUID)
+                if (ID == UINT_MAX) {
+                    return;
+                }
+
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {
                         UUID = patch_UUID[objID];
@@ -173,6 +178,11 @@ RT_PROGRAM void triangle_intersect(int objID /**< [in] index of primitive in geo
 
                 // FIX: Convert UUID to position using primitive_positions lookup
                 uint ID = primitive_positions[U];
+
+                // Skip if UUID maps to invalid position (e.g., deleted UUID)
+                if (ID == UINT_MAX) {
+                    return;
+                }
 
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {
@@ -470,14 +480,23 @@ RT_PROGRAM void tile_intersect(int objID /**< [in] index of primitive in geometr
                 float bmag = d_magnitude(b);
                 float2 uv = make_float2(ddota / amag / amag, ddotb / bmag / bmag);
 
+                // Get tile base UUID - objID should always be 0 since each tile has one geometry entry
                 uint U = tile_UUID[objID];
 
                 // FIX: Convert UUID to position using primitive_positions lookup
                 uint ID = primitive_positions[U];
 
+                // Skip if UUID maps to invalid position (e.g., deleted UUID)
+                if (ID == UINT_MAX) {
+                    return;
+                }
+
                 if (maskID[ID] == -1) { // no texture transparency
                     if (rtPotentialIntersection(t)) {
-                        UUID = U + floorf(uv.y * object_subdivisions[ID].y) * object_subdivisions[ID].x + floorf(uv.x * object_subdivisions[ID].x);
+                        // Calculate subpatch indices and clamp to valid range [0, subdivisions-1]
+                        int subpatch_x = min((int)floorf(uv.x * object_subdivisions[ID].x), object_subdivisions[ID].x - 1);
+                        int subpatch_y = min((int)floorf(uv.y * object_subdivisions[ID].y), object_subdivisions[ID].y - 1);
+                        UUID = U + subpatch_y * object_subdivisions[ID].x + subpatch_x;
                         rtReportIntersection(0);
                     }
                 } else { // use transparency mask
@@ -488,7 +507,10 @@ RT_PROGRAM void tile_intersect(int objID /**< [in] index of primitive in geometr
 
                     if (maskdata[ind]) {
                         if (rtPotentialIntersection(t)) {
-                            UUID = U + floorf(uv.y * object_subdivisions[ID].y) * object_subdivisions[ID].x + floorf(uv.x * object_subdivisions[ID].x);
+                            // Calculate subpatch indices and clamp to valid range [0, subdivisions-1]
+                            int subpatch_x = min((int)floorf(uv.x * object_subdivisions[ID].x), object_subdivisions[ID].x - 1);
+                            int subpatch_y = min((int)floorf(uv.y * object_subdivisions[ID].y), object_subdivisions[ID].y - 1);
+                            UUID = U + subpatch_y * object_subdivisions[ID].x + subpatch_x;
                             rtReportIntersection(0);
                         }
                     }

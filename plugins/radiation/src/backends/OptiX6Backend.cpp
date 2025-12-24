@@ -546,6 +546,9 @@ void OptiX6Backend::launchDirectRays(const RayTracingLaunchParams& params) {
     // Set launch parameters
     launchParamsToVariables(params);
 
+    // Validate context to ensure acceleration structure is built and buffers are synchronized
+    RT_CHECK_ERROR(rtContextValidate(OptiX_Context));
+
     // Launch direct rays: dimension = (n, n, primitives) where n = sqrt(rays_per_primitive)
     // This matches CUDA code: launch_index.x/y for ray sampling, launch_index.z for primitive
     uint n = std::ceil(std::sqrt(static_cast<double>(params.rays_per_primitive)));
@@ -622,6 +625,9 @@ void OptiX6Backend::launchCameraRays(const RayTracingLaunchParams& params) {
     RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, params.camera_pixel_offset.x));
     RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, params.camera_pixel_offset.y));
     RT_CHECK_ERROR(rtVariableSet1ui(camera_ID_RTvariable, params.camera_id));
+
+    // Validate context to ensure acceleration structure is built and buffers are synchronized
+    RT_CHECK_ERROR(rtContextValidate(OptiX_Context));
 
     // Launch camera rays: dimension = (1, resolution.x, resolution.y) for pixel sampling
     RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_CAMERA,
@@ -1340,6 +1346,7 @@ void OptiX6Backend::geometryToBuffers(const RayTracingGeometry& geometry) {
             }
         }
         initializeBuffer2Dfloat3(tile_vertices_RTbuffer, tile_verts_2d);
+
         initializeBuffer1Dui(tile_UUID_RTbuffer, geometry.tiles.UUIDs);
     }
 
