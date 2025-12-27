@@ -209,6 +209,175 @@ When investigating test failures, you MUST:
 1. Add any tests to the relevant `selfTest.cpp` file based on new code.
 2. Review the documentation to ensure it is up-to-date (either in `doc/*.dox` or in `plugins/*/doc/*.dox`).
 
+## Radiation Plugin: Backend Implementation Guide
+
+**CRITICAL**: When implementing new ray-tracing backends (OptiX 7, Vulkan), indexing errors cause 90%+ of debugging time. This guide prevents those errors.
+
+### The Five Index Types
+
+The radiation plugin uses five distinct index types that must NEVER be confused:
+
+#### 1. UUID (Primitive Unique Universal Identifier)
+- **What**: Sparse, non-sequential identifier assigned by Helios Context
+- **Range**: Arbitrary (e.g., 10, 42, 100, 5) with gaps
+- **Purpose**: Persistent primitive identification, result mapping to Context
+- **Storage**: `primitive_UUIDs[position]`, `patches.UUIDs[patch_idx]`
+- **NEVER use as direct array index** - causes out-of-bounds for sparse UUIDs
+
+#### 2. Position (Array Index)
+- **What**: Dense, sequential buffer index
+- **Range**: 0 to `primitive_count - 1` (no gaps)
+- **Purpose**: Direct GPU buffer indexing for cache efficiency
+- **Usage**: ALL per-primitive buffer access
+- **Pattern**: `buffer[position]` or `buffer[position * stride + offset]`
+
+#### 3. Object ID
+- **What**: Launch parameter or parent object identifier
+- **Range**: 0 to `Nobjects-1` OR 0 to `Nprimitives-1` (context-dependent!)
+- **Usage**: Access object-level data in ray generation
+- **Common Error**: Confusing object count with primitive count
+
+#### 4. Primitive ID
+- **What**: Index within parent object (for subdivided geometry)
+- **Range**: 0 to `(subdivisions.x * subdivisions.y - 1)`
+- **Usage**: Compute sub-primitive UUID from parent
+- **Pattern**: `UUID = base_UUID + primID`
+
+#### 5. Pixel Index
+- **What**: Flattened 2D camera pixel coordinate
+- **Range**: 0 to `(resolution.x * resolution.y - 1)`
+- **Usage**: Camera rendering, pixel labels, depth maps
+- **Pattern**: `row * width + col` (row-major)
+
+### GPU Shader Patterns (All Backends)
+
+These patterns apply to CUDA (OptiX), GLSL (Vulkan), and any future shader language:
+
+#### Pattern 1: UUID → Position Conversion
+
+**ALWAYS** convert UUID to position before buffer access:
+
+```cuda
+// CORRECT (OptiX CUDA):
+uint position = primitive_positions[UUID];
+if (position == UINT_MAX) {
+    return;  // Deleted/invalid primitive
+}
+bool two_sided = twosided_flag[position];
+
+// WRONG - causes out-of-bounds:
+bool two_sided = twosided_flag[UUID];  // UUID=100, buffer size=10 → CRASH
+```
+
+**Vulkan GLSL equivalent:**
+```glsl
+uint position = primitive_positions[UUID];
+if (position == 0xFFFFFFFF) {  // UINT_MAX in GLSL
+    return;
+}
+bool two_sided = twosided_flags[position];
+```
+
+**Historical bug**: Commit 0ec2dc25a fixed 20+ instances of direct UUID indexing.
+
+#### Pattern 2: Pixel Index from Tiled Launch
+
+Camera rendering uses tiled launches - must add tile offset:
+
+```cuda
+// CORRECT (OptiX CUDA):
+uint global_x = camera_pixel_offset.x + launch_index.y;  // Note: y → x mapping!
+uint global_y = camera_pixel_offset.y + launch_index.z;  // z → y mapping
+size_t pixel_idx = global_y * camera_resolution_full.x + global_x;  // Row-major
+
+// WRONG - forgets offset:
+size_t pixel_idx = launch_index.y * width + launch_index.z;  // Off by tile offset!
+```
+
+**Vulkan GLSL equivalent:**
+```glsl
+uvec2 global_coord = tile_offset + gl_LaunchIDNV.xy;
+uint pixel_idx = global_coord.y * full_resolution.x + global_coord.x;
+```
+
+**Key points:**
+- Launch indices are LOCAL to tile
+- Must add `camera_pixel_offset` for global coordinates
+- Use `camera_resolution_full` (global), NOT `camera_resolution` (tile)
+
+#### Pattern 3: Subpatch UUID Calculation
+
+For subdivided geometry (tiles), compute sub-primitive UUID:
+
+```cuda
+// CORRECT:
+uint base_UUID = primitiveID[objID];
+int2 subdivs = object_subdivisions[objID];
+
+for (int row = 0; row < subdivs.y; row++) {
+    for (int col = 0; col < subdivs.x; col++) {
+        uint UUID = base_UUID + row * subdivs.x + col;  // row first, then col!
+        // ...
+    }
+}
+
+// WRONG - swapped indices:
+uint UUID = base_UUID + col * subdivs.y + row;  // Produces wrong UUIDs
+```
+
+**Historical bug**: Commit 53ca9687d - swapped col/row caused UUID calculation to exceed valid range.
+
+**CRITICAL**: Subpatches must have `object_subdivisions = (1,1)`, only parent geometry has actual subdivision counts. Inheritance causes UUID overflow bugs.
+
+### Buffer Sizing Rules (CPU-Side)
+
+Use helper methods to avoid sizing errors:
+
+| Buffer | Size Method | WRONG (Common Bug) |
+|--------|-------------|-------------------|
+| transform_matrices | `geometry.getPerPrimitiveBufferSize() * 16` | `Nobjects * 16` |
+| primitive_IDs | `geometry.getPerPrimitiveBufferSize()` | `Nobjects` ← Bug! |
+| object_subdivisions | `geometry.getPerPrimitiveBufferSize()` | `Nobjects` |
+| primitive_positions | `geometry.getUUIDLookupBufferSize()` | `primitive_count` ← Bug! |
+| patches.vertices | `patch_count * 4` | `primitive_count * 4` |
+
+**Historical bug (commit 53ca9687d)**: `primitive_IDs` sized by `Nobjects` instead of `Nprimitives`, causing bounds errors when accessing tile subdivisions.
+
+### Backend Implementation Checklist
+
+#### CPU-Side (updateGeometry method):
+- [ ] **FIRST LINE**: Call `validateGeometryBeforeUpload(geometry)` - catches errors immediately
+- [ ] Size per-primitive buffers: `geometry.getPerPrimitiveBufferSize()`
+- [ ] Size UUID lookup: `geometry.getUUIDLookupBufferSize()`
+- [ ] Upload `geometry.primitive_positions` as sparse table (size = max_UUID + 1)
+- [ ] Upload `geometry.primitive_IDs` (size = Nprimitives, NOT Nobjects!)
+- [ ] Verify `object_subdivisions` has (1,1) for subpatches
+
+#### GPU Shader Code (any language):
+- [ ] UUID→Position: Always use `primitive_positions[UUID]` lookup first
+- [ ] Bounds check: Verify `position != UINT_MAX` after lookup
+- [ ] Pixel indexing: Add tile offset to local coordinates
+- [ ] Use full resolution for flattening: `row * full_width + col`
+- [ ] Subpatch calc: `base_UUID + row * subdivisions.x + col`
+- [ ] Multi-dimensional buffers: Use correct dimension order (see `BufferIndexing.h`)
+
+#### Testing:
+- [ ] Build with `--debugbuild` to enable validation
+- [ ] Run: `utilities/run_tests.sh --project-dir mytest --test radiation --debugbuild --verbose`
+- [ ] Validation should pass with no errors
+- [ ] Intentionally break buffer size to verify validation catches it
+
+### Reference Implementation
+
+See `plugins/radiation/src/backends/OptiX6Backend.cpp` for CPU-side buffer upload.
+
+See CUDA files for GPU shader patterns (translate to your shader language):
+- `plugins/radiation/src/rayHit.cu` - UUID→position conversion in hit shaders
+- `plugins/radiation/src/rayGeneration.cu` - Pixel indexing, subpatch calculation
+- `plugins/radiation/src/primitiveIntersection.cu` - Intersection with position lookup
+
+**Key principle**: The algorithms are universal (UUID→position lookup, pixel flattening), only syntax changes per shader language.
+
 ## MCP: Knowledge-graph memory policy
 
 - Server alias: `memory` (added via `claude mcp add memory npx:@modelcontextprotocol/server-memory`).
