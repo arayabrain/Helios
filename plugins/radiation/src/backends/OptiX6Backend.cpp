@@ -445,6 +445,10 @@ void OptiX6Backend::updateGeometry(const RayTracingGeometry& geometry) {
         helios_runtime_error("ERROR (OptiX6Backend::updateGeometry): Backend not initialized.");
     }
 
+    // Validate geometry before upload (debug builds only)
+    // Catches buffer sizing errors that cause 90% of backend debugging issues
+    validateGeometryBeforeUpload(geometry);
+
     // Convert geometry data to OptiX buffers
     geometryToBuffers(geometry);
 

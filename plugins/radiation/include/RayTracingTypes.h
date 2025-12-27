@@ -55,13 +55,6 @@ struct RayTracingGeometry {
     //!< Enables CUDA to convert UUID to array position for buffer indexing
     std::vector<uint> primitive_positions;
 
-    // UUID ↔ Position mapping utility (CPU-side type-safe conversion)
-    //!< Provides O(1) bidirectional conversion between UUIDs and array positions
-    //!< Built during geometry initialization via mapper.build(primitive_UUIDs)
-    //!< Use mapper.toPosition(uuid) to convert UUID → position for buffer access
-    //!< Use mapper.toUUID(pos) to convert position → UUID for result mapping
-    UUIDPositionMapper mapper;
-
     // Per-type geometry data
     PrimitiveTypeGeometry patches;      //!< Patch data (4 vertices per patch)
     PrimitiveTypeGeometry triangles;    //!< Triangle data (3 vertices per triangle)
@@ -93,6 +86,68 @@ struct RayTracingGeometry {
     size_t tile_count = 0;                      //!< Number of tiles
     size_t voxel_count = 0;                     //!< Number of voxels
     size_t bbox_count = 0;                      //!< Number of bounding boxes
+
+    // UUID ↔ Position mapping utility (CPU-side type-safe conversion)
+    UUIDPositionMapper mapper;
+
+    // ========== Helper Methods for Backend Implementation ==========
+
+    /**
+     * @brief Get expected buffer size for per-primitive data
+     * @return primitive_count
+     *
+     * Use when allocating buffers indexed by position (0..primitive_count-1).
+     * CRITICAL: Use this instead of Nobjects to avoid buffer undersizing bugs!
+     *
+     * Buffers to size with this:
+     * - transform_matrices: size = getPerPrimitiveBufferSize() * 16
+     * - object_subdivisions: size = getPerPrimitiveBufferSize()
+     * - primitive_IDs: size = getPerPrimitiveBufferSize()  ← NOT Nobjects!
+     * - twosided_flags, solid_fractions, object_IDs: size = getPerPrimitiveBufferSize()
+     *
+     * Historical bug (commit 53ca9687d): primitive_IDs sized by Nobjects instead of Nprimitives
+     */
+    size_t getPerPrimitiveBufferSize() const { return primitive_count; }
+
+    /**
+     * @brief Get expected buffer size for UUID→position lookup table
+     * @return max(primitive_UUIDs) + 1
+     *
+     * The lookup table is a SPARSE array indexed by UUID value.
+     * Must be sized to accommodate the highest UUID, not the primitive count!
+     *
+     * Example: If UUIDs are [10, 42, 100], size must be 101, not 3.
+     * Entries for non-existent UUIDs contain UINT_MAX.
+     */
+    size_t getUUIDLookupBufferSize() const {
+        if (primitive_UUIDs.empty()) return 0;
+        return *std::max_element(primitive_UUIDs.begin(), primitive_UUIDs.end()) + 1;
+    }
+
+    /**
+     * @brief Validate geometry buffer consistency (debug builds only)
+     *
+     * Comprehensive validation of all indexing invariants.
+     * Catches buffer sizing errors BEFORE GPU upload, preventing crashes and silent corruption.
+     *
+     * Validates:
+     * - All per-primitive buffers have size == primitive_count
+     * - All per-type buffers match their type counts
+     * - UUID→position mapping is bidirectionally consistent
+     * - primitive_positions table is correctly sized (max_UUID + 1)
+     * - Object subdivisions are valid (>= 1)
+     *
+     * Call this at the START of every backend's updateGeometry() method.
+     *
+     * @throws helios_runtime_error with detailed message if validation fails
+     * @note Compiled out in release builds (#ifndef NDEBUG) - zero production cost
+     *
+     * Historical bugs this prevents:
+     * - Buffer sized by Nobjects instead of Nprimitives (commit 53ca9687d)
+     * - Wrong primitive_positions size
+     * - Inconsistent type counts
+     */
+    void validate() const;
 };
 
 /**

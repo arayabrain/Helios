@@ -243,6 +243,29 @@ public:
      */
     virtual std::string getBackendName() const = 0;
 
+protected:
+    /**
+     * @brief Validate geometry before upload (debug builds only)
+     *
+     * Backend implementers MUST call this at the START of updateGeometry().
+     * Catches buffer sizing errors before GPU upload, preventing crashes.
+     *
+     * @param geometry Geometry to validate
+     * @throws helios_runtime_error if validation fails with detailed error message
+     * @note Compiled out in release builds (#ifndef NDEBUG) - zero cost
+     *
+     * This validation prevents historical bugs like:
+     * - primitive_IDs sized by Nobjects instead of Nprimitives (commit 53ca9687d)
+     * - Wrong primitive_positions size
+     * - Inconsistent type-specific buffer sizes
+     */
+    void validateGeometryBeforeUpload(const RayTracingGeometry& geometry) const {
+#ifndef NDEBUG
+        geometry.validate();
+#endif
+    }
+
+public:
     // ========== Factory Method ==========
 
     /**
