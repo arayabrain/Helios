@@ -265,4 +265,251 @@ using CameraMaterialIndexer = BufferIndexer4D;
  */
 using SpecularRadiationIndexer = BufferIndexer4D;
 
+// ========== UUID / Position Lookup Helper ==========
+
+/**
+ * @brief Safe UUID→Position lookup with automatic bounds checking
+ *
+ * Encapsulates the UUID→position conversion pattern used throughout CUDA code.
+ * Prevents forgetting bounds check or using UUID as direct array index.
+ *
+ * This helper makes it impossible to:
+ * - Use UUID directly as array index (sparse UUIDs cause out-of-bounds)
+ * - Forget bounds checking (built into toPosition())
+ * - Access deleted/invalid primitives (returns false for UINT_MAX)
+ *
+ * Usage in CUDA ray hit programs:
+ * @code
+ * UUIDLookupHelper lookup(primitive_positions, Nprimitives);
+ * uint position;
+ * if (!lookup.toPosition(hit_UUID, position)) {
+ *     return;  // Invalid UUID - primitive was deleted or never existed
+ * }
+ * // Safe to use position for all buffer access
+ * bool two_sided = twosided_flag[position];
+ * int2 subdivs = object_subdivisions[position];
+ * @endcode
+ *
+ * Historical bugs prevented (commit 0ec2dc25a):
+ * - 20+ instances of direct UUID indexing: twosided_flag[UUID], objectID[UUID]
+ */
+class UUIDLookupHelper {
+private:
+    const uint* primitive_positions_;  ///< GPU buffer: sparse UUID→position lookup table
+    size_t primitive_count_;           ///< Total primitive count (for bounds checking)
+
+public:
+    /**
+     * @brief Construct UUID lookup helper
+     * @param prim_positions Pointer to primitive_positions buffer (sparse array indexed by UUID)
+     * @param prim_count Total number of primitives (for bounds validation)
+     */
+    HELIOS_HOST_DEVICE
+    UUIDLookupHelper(const uint* prim_positions, size_t prim_count)
+        : primitive_positions_(prim_positions)
+        , primitive_count_(prim_count) {}
+
+    /**
+     * @brief Convert UUID to position with automatic bounds checking
+     *
+     * @param UUID Primitive UUID to look up
+     * @param[out] position Output position (only written if UUID is valid)
+     * @return true if UUID is valid and position was written, false if UUID not found
+     *
+     * Returns false if:
+     * - primitive_positions[UUID] == UINT_MAX (deleted/never created)
+     * - primitive_positions[UUID] >= primitive_count (corrupted data)
+     *
+     * Position parameter is unchanged if function returns false.
+     */
+    HELIOS_HOST_DEVICE inline
+    bool toPosition(uint UUID, uint& position) const {
+        // Lookup in sparse table - returns UINT_MAX if UUID doesn't exist
+        uint pos = primitive_positions_[UUID];
+        if (pos == UINT_MAX || pos >= primitive_count_) {
+            return false;  // Invalid UUID or out-of-bounds position
+        }
+        position = pos;
+        return true;
+    }
+};
+
+// ========== Camera Pixel Coordinate Helper ==========
+
+/**
+ * @brief Camera pixel coordinate abstraction for tiled rendering
+ *
+ * Encapsulates the tile offset + coordinate mapping + flattening complexity.
+ * Prevents x/y swapping, wrong offset, wrong resolution variable errors.
+ *
+ * This helper makes it impossible to:
+ * - Forget tile offset when computing global coordinates
+ * - Swap x and y coordinates (launch_index.y → x, launch_index.z → y)
+ * - Use wrong resolution (tile vs full)
+ * - Get flattening formula wrong (always row-major: y * width + x)
+ *
+ * Usage in CUDA camera ray generation:
+ * @code
+ * // Simple one-line pixel index calculation:
+ * size_t pixel_idx = PixelCoordinate::computeFlatIndex(
+ *     launch_index, camera_pixel_offset, camera_resolution_full);
+ * camera_pixel_label[pixel_idx] = hit_UUID + 1;
+ *
+ * // Or step-by-step if you need the coordinates:
+ * PixelCoordinate pixel = PixelCoordinate::fromTiledLaunch(
+ *     launch_index, camera_pixel_offset, camera_resolution_full);
+ * size_t idx = pixel.toFlatIndex(camera_resolution_full);
+ * @endcode
+ *
+ * Historical bugs prevented:
+ * - Forgetting camera_pixel_offset in tiled rendering
+ * - Swapping x/y coordinates
+ * - Using camera_resolution instead of camera_resolution_full
+ */
+struct PixelCoordinate {
+    uint x;  ///< Global x-coordinate (column index)
+    uint y;  ///< Global y-coordinate (row index)
+
+    /// Construct pixel coordinate from global x, y
+    HELIOS_HOST_DEVICE
+    PixelCoordinate(uint x_coord, uint y_coord) : x(x_coord), y(y_coord) {}
+
+    /**
+     * @brief Convert to flat array index (row-major)
+     * @param full_resolution Global camera resolution (width, height)
+     * @return Flattened index: y * width + x (always row-major)
+     */
+    HELIOS_HOST_DEVICE inline
+    size_t toFlatIndex(const helios::int2& full_resolution) const {
+        return static_cast<size_t>(y) * full_resolution.x + x;
+    }
+
+// CUDA-specific factory methods (use OptiX types)
+#ifdef __CUDACC__
+    /**
+     * @brief Create pixel coordinate from tiled launch parameters
+     *
+     * @param launch_idx OptiX launch index (x unused, y=local col, z=local row)
+     * @param tile_offset Tile offset in global pixel space (x, y)
+     * @param full_resolution Global camera resolution (NOT tile resolution!)
+     * @return Global pixel coordinate
+     *
+     * Encapsulates mapping: global_x = tile_offset.x + launch_idx.y
+     *                         global_y = tile_offset.y + launch_idx.z
+     */
+    __device__ static
+    PixelCoordinate fromTiledLaunch(
+        const optix::uint3& launch_idx,
+        const optix::int2& tile_offset,
+        const optix::int2& full_resolution)
+    {
+        (void)full_resolution;  // Unused but included for API clarity
+        return PixelCoordinate(
+            tile_offset.x + launch_idx.y,  // Global x from local y-index
+            tile_offset.y + launch_idx.z   // Global y from local z-index
+        );
+    }
+
+    /**
+     * @brief Convenience: compute flat index directly from launch parameters
+     *
+     * @param launch_idx OptiX launch index
+     * @param tile_offset Tile offset in global pixel space
+     * @param full_resolution Global camera resolution
+     * @return Flattened pixel index ready for buffer access
+     *
+     * One-line replacement for manual pixel index calculation.
+     */
+    __device__ static
+    size_t computeFlatIndex(
+        const optix::uint3& launch_idx,
+        const optix::int2& tile_offset,
+        const optix::int2& full_resolution)
+    {
+        PixelCoordinate pixel = fromTiledLaunch(launch_idx, tile_offset, full_resolution);
+        return pixel.toFlatIndex(full_resolution);
+    }
+#endif // __CUDACC__
+};
+
+// ========== Subpatch UUID Calculator ==========
+
+/**
+ * @brief Subpatch UUID calculator for tiled/subdivided geometry
+ *
+ * Encapsulates the subdivision offset calculation pattern.
+ * Prevents wrong dimension order (i vs j, x vs y, row vs col).
+ *
+ * This helper makes it impossible to:
+ * - Get subdivision offset formula wrong
+ * - Swap row/column indices
+ * - Use wrong dimension (NX vs NY)
+ *
+ * Usage in CUDA ray generation:
+ * @code
+ * uint base_UUID = primitiveID[objID];
+ * SubpatchUUIDCalculator calc(base_UUID, object_subdivisions[objID]);
+ *
+ * // Clear semantic names prevent index swapping
+ * for (int row = 0; row < calc.getSubdivisions().y; row++) {
+ *     for (int col = 0; col < calc.getSubdivisions().x; col++) {
+ *         uint subpatch_UUID = calc.getUUID(col, row);
+ *         // ... launch ray for this subpatch
+ *     }
+ * }
+ * @endcode
+ *
+ * Historical bugs prevented (commit 53ca9687d):
+ * - Swapped indices: UUID = base + ii * NY + jj (should be jj * NX + ii)
+ * - Wrong subdivision counts from parent inheritance
+ */
+class SubpatchUUIDCalculator {
+private:
+    uint base_UUID_;            ///< Base UUID for first subpatch
+    helios::int2 subdivisions_; ///< Subdivision counts (x, y)
+
+public:
+    /**
+     * @brief Construct subpatch UUID calculator
+     * @param base_UUID UUID of first subpatch (at position 0,0)
+     * @param subdivisions Subdivision counts in x and y directions
+     */
+    HELIOS_HOST_DEVICE
+    SubpatchUUIDCalculator(uint base_UUID, helios::int2 subdivisions)
+        : base_UUID_(base_UUID)
+        , subdivisions_(subdivisions) {}
+
+    /**
+     * @brief Get UUID for subpatch at (col, row) position
+     *
+     * @param col Column index (x-direction, 0 to subdivisions.x-1)
+     * @param row Row index (y-direction, 0 to subdivisions.y-1)
+     * @return UUID = base_UUID + row * subdivisions.x + col
+     *
+     * Parameter names make dimension order explicit - can't accidentally swap.
+     */
+    HELIOS_HOST_DEVICE inline
+    uint getUUID(int col, int row) const {
+        return base_UUID_ + row * subdivisions_.x + col;
+    }
+
+    /**
+     * @brief Get total number of subpatches
+     * @return subdivisions.x * subdivisions.y
+     */
+    HELIOS_HOST_DEVICE inline
+    int getSubpatchCount() const {
+        return subdivisions_.x * subdivisions_.y;
+    }
+
+    /**
+     * @brief Get subdivisions (useful for loop bounds)
+     * @return Subdivision counts as int2
+     */
+    HELIOS_HOST_DEVICE inline
+    helios::int2 getSubdivisions() const {
+        return subdivisions_;
+    }
+};
+
 #endif // HELIOS_BUFFER_INDEXING_H
