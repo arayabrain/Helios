@@ -6835,6 +6835,10 @@ void RadiationModel::buildUUIDMapping() {
         uuid_to_position[UUID] = i;
         position_to_uuid.push_back(UUID);
     }
+
+    // Build type-safe mapper (new indexing system)
+    // Provides compile-time safety for UUID/position conversions
+    geometry_data.mapper.build(geometry_data.primitive_UUIDs);
 }
 
 static void validateAndCorrectMaterialProperties(

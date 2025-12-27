@@ -17,6 +17,7 @@
 #define RAYTRACING_TYPES_H
 
 #include "Context.h"
+#include "IndexTypes.h"
 #include <vector>
 
 namespace helios {
@@ -53,6 +54,13 @@ struct RayTracingGeometry {
     //!< Size: max_UUID + 1 (sparse array, entries for non-existent UUIDs = UINT_MAX)
     //!< Enables CUDA to convert UUID to array position for buffer indexing
     std::vector<uint> primitive_positions;
+
+    // UUID ↔ Position mapping utility (CPU-side type-safe conversion)
+    //!< Provides O(1) bidirectional conversion between UUIDs and array positions
+    //!< Built during geometry initialization via mapper.build(primitive_UUIDs)
+    //!< Use mapper.toPosition(uuid) to convert UUID → position for buffer access
+    //!< Use mapper.toUUID(pos) to convert position → UUID for result mapping
+    UUIDPositionMapper mapper;
 
     // Per-type geometry data
     PrimitiveTypeGeometry patches;      //!< Patch data (4 vertices per patch)
