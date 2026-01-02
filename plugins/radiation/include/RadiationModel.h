@@ -2448,6 +2448,11 @@ protected:
     //! Mapping object IDs to UUIDs - RTvariable object
     RTvariable primitiveID_RTvariable;
 
+    //! UUID to array position lookup table - RTbuffer object
+    RTbuffer primitive_positions_RTbuffer;
+    //! UUID to array position lookup table - RTvariable object
+    RTvariable primitive_positions_RTvariable;
+
     //! Primitive two-sided flag - RTbuffer object
     RTbuffer twosided_flag_RTbuffer;
     //! Primitive two-sided flag - RTvariable

@@ -1423,6 +1423,9 @@ void RadiationModel::initializeOptiX() {
     // Primitive ID Buffer
     addBuffer("primitiveID", primitiveID_RTbuffer, primitiveID_RTvariable, RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_INT, 1);
 
+    // Primitive Positions Buffer (UUID → array position lookup table)
+    addBuffer("primitive_positions", primitive_positions_RTbuffer, primitive_positions_RTvariable, RT_BUFFER_INPUT, RT_FORMAT_UNSIGNED_INT, 1);
+
     // primitive two-sided flag buffer
     addBuffer("twosided_flag", twosided_flag_RTbuffer, twosided_flag_RTvariable, RT_BUFFER_INPUT, RT_FORMAT_BYTE, 1);
 
@@ -1891,6 +1894,9 @@ void RadiationModel::updateGeometry(const std::vector<uint> &UUIDs) {
 
     backend->updateGeometry(geometry_data);
     backend->buildAccelerationStructure();
+
+    // Upload primitive_positions to old context (needed by direct/diffuse ray hit programs)
+    initializeBuffer1Dui(primitive_positions_RTbuffer, geometry_data.primitive_positions);
 
     radiativepropertiesneedupdate = true;
     isgeometryinitialized = true;
