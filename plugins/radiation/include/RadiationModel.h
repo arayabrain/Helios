@@ -431,6 +431,12 @@ private:
     }
 };
 
+//! Struct to store camera tile information for tiled rendering
+struct CameraTile {
+    helios::int2 resolution;  //!< Tile dimensions (width, height)
+    helios::int2 offset;      //!< Tile offset in full image (x, y)
+};
+
 //! Metadata for radiation camera image export
 struct CameraMetadata {
 
@@ -2231,6 +2237,34 @@ protected:
     void updateLightModelPosition(uint sourceID, const helios::vec3 &delta_position);
 
     void updateCameraModelPosition(const std::string &cameralabel);
+
+    //! Build camera launch parameters from camera settings
+    /**
+     * @brief Build camera launch parameters from camera settings
+     * @param camera Camera configuration
+     * @param camera_id Camera index
+     * @param antialiasing_samples Antialiasing sample count
+     * @param tile_resolution Tile resolution (or full resolution if no tiling)
+     * @param tile_offset Tile offset (0,0 if no tiling)
+     * @return Launch parameters struct ready for backend
+     */
+    helios::RayTracingLaunchParams buildCameraLaunchParams(
+        const RadiationCamera& camera,
+        uint camera_id,
+        uint antialiasing_samples,
+        const helios::int2& tile_resolution,
+        const helios::int2& tile_offset);
+
+    //! Compute camera tiles for large renders
+    /**
+     * @brief Compute camera tiles for large renders
+     * @param camera Camera to tile
+     * @param maxRays Maximum rays per launch
+     * @return Vector of tiles (single tile if no tiling needed)
+     */
+    std::vector<CameraTile> computeCameraTiles(
+        const RadiationCamera& camera,
+        size_t maxRays);
 
     //! Phase 1: Build backend-agnostic geometry data from Context primitives
     /**

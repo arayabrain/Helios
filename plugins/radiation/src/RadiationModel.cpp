@@ -1323,14 +1323,7 @@ void RadiationModel::enforcePeriodicBoundary(const std::string &boundary) {
     } else {
 
         std::cout << "WARNING (RadiationModel::enforcePeriodicBoundary()): unknown boundary of '" << boundary
-                  << "'. Possible choices are "
-                     "x"
-                     ", "
-                     "y"
-                     ", or "
-                     "xy"
-                     "."
-                  << std::endl;
+                  << "'. Possible choices are x, y, or xy." << std::endl;
     }
 }
 
@@ -2699,11 +2692,28 @@ void RadiationModel::updateRadiativeProperties() {
         }
     }
 
-    initializeBuffer1Df(rho_RTbuffer, flatten(rho));
-    initializeBuffer1Df(tau_RTbuffer, flatten(tau));
+    std::vector<float> rho_flat = flatten(rho);
+    std::vector<float> tau_flat = flatten(tau);
+    std::vector<float> rho_cam_flat = flatten(rho_cam);
+    std::vector<float> tau_cam_flat = flatten(tau_cam);
 
-    initializeBuffer1Df(rho_cam_RTbuffer, flatten(rho_cam));
-    initializeBuffer1Df(tau_cam_RTbuffer, flatten(tau_cam));
+    // Upload to OLD OptiX buffers (legacy compatibility - these buffers might not be used)
+    initializeBuffer1Df(rho_RTbuffer, rho_flat);
+    initializeBuffer1Df(tau_RTbuffer, tau_flat);
+    initializeBuffer1Df(rho_cam_RTbuffer, rho_cam_flat);
+    initializeBuffer1Df(tau_cam_RTbuffer, tau_cam_flat);
+
+    // CRITICAL: Also upload to BACKEND buffers (this is what CUDA actually reads!)
+    material_data.num_primitives = Nprimitives;
+    material_data.num_bands = radiation_bands.size();
+    material_data.num_sources = radiation_sources.size();
+    material_data.num_cameras = cameras.size();
+    material_data.reflectivity = rho_flat;
+    material_data.transmissivity = tau_flat;
+    material_data.reflectivity_cam = rho_cam_flat;
+    material_data.transmissivity_cam = tau_cam_flat;
+
+    backend->updateMaterials(material_data);
 
     // Specular reflection exponent
     std::vector<float> specular_exponent;
@@ -3365,12 +3375,16 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     }
 
     if (radiativepropertiesneedupdate) {
+        // Use old material path (handles spectrum interpolation)
         updateRadiativeProperties();
+        // DON'T call backend->updateMaterials() - old code already uploaded via direct OptiX calls
+    } else {
+        // Use new backend path (per-band materials only)
+        buildMaterialData();
+        backend->updateMaterials(material_data);
     }
 
-    // Phase 1: Upload materials and sources to backend
-    buildMaterialData();
-    backend->updateMaterials(material_data);
+    // Upload sources to backend (always use new path)
     buildSourceData();
     backend->updateSources(source_data);
 
@@ -3999,21 +4013,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
         // Set scattering iteration to 0 for specular calculation (specular only computed on first iteration)
         RT_CHECK_ERROR(rtVariableSet1ui(scattering_iteration_RTvariable, 0));
 
-        // Setup atmospheric sky radiance model for all cameras (must run before any camera rendering)
-        // This computes and uploads sky radiance parameters independently for each camera
-        uint cam = 0;
-        for (auto &camera: cameras) {
-            // Update atmospheric sky radiance model for this camera's spectral bands
-            // Returns the base sky radiance values that should be used for this camera
-            std::vector<float> sky_base_radiances = updateAtmosphericSkyModel(band_labels, camera.second);
-
-            // Upload sky base radiances to separate camera sky radiance buffer
-            // This is completely independent from the diffuse_flux buffer used for radiation transfer
-            initializeBuffer1Df(camera_sky_radiance_RTbuffer, sky_base_radiances);
-
-            cam++;
-        }
-
         // Setup solar disk rendering for cameras (enables lens flare effects)
         // Find sun-like sources (collimated or sun_sphere) and compute solar disk radiance
         vec3 sun_dir(0, 0, 1); // Default zenith
@@ -4047,28 +4046,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             }
         }
 
-        // Upload solar disk parameters
-        RT_CHECK_ERROR(rtVariableSet3f(sun_direction_RTvariable, sun_dir.x, sun_dir.y, sun_dir.z));
-        initializeBuffer1Df(solar_disk_radiance_RTbuffer, solar_radiances);
-
-        if (has_sun_source) {
-            // cos(0.265°) ≈ 0.999989 - rays within this angle of sun direction see the solar disk
-            const float solar_cos_angle = 0.999989f;
-            RT_CHECK_ERROR(rtVariableSet1f(solar_disk_cos_angle_RTvariable, solar_cos_angle));
-
-            if (message_flag) {
-                std::cout << "Solar disk rendering enabled: sun_direction = (" << sun_dir.x << ", " << sun_dir.y << ", " << sun_dir.z << ")" << std::endl;
-                std::cout << "Solar disk radiances (W/m²/sr): ";
-                for (size_t b = 0; b < solar_radiances.size(); b++) {
-                    std::cout << band_labels.at(b) << "=" << solar_radiances[b] << " ";
-                }
-                std::cout << std::endl;
-            }
-        } else {
-            // No sun source - disable solar disk rendering
-            RT_CHECK_ERROR(rtVariableSet1f(solar_disk_cos_angle_RTvariable, 0.0f));
-        }
-
         if (scatteringenabled && (emissionenabled || diffuseenabled || rundirect)) {
             // re-set outgoing radiation buffers
             copyBuffer1D(scatter_buff_top_cam_RTbuffer, radiation_out_top_RTbuffer);
@@ -4082,165 +4059,106 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 initializeBuffer1Df(diffuse_flux_RTbuffer, diffuse_flux);
             }
 
-
             size_t n = ceil(sqrt(double(diffuseRayCount)));
 
-            cam = 0;
+            // Upload sky model parameters to backend (for camera rendering)
+
+            if (!cameras.empty() && prague_params.size() == Nbands_launch) {
+                // Get sky radiances for first camera (already computed above)
+                std::vector<float> sky_for_backend = updateAtmosphericSkyModel(band_labels, cameras.begin()->second);
+
+                // Convert Prague params to vec4 format for backend
+                std::vector<helios::vec4> prague_vec4(prague_params.size());
+                for (size_t i = 0; i < prague_params.size(); i++) {
+                    prague_vec4[i] = helios::make_vec4(prague_params[i].x, prague_params[i].y,
+                                                       prague_params[i].z, prague_params[i].w);
+                }
+
+                // Upload to backend
+                backend->updateSkyModel(
+                    prague_vec4,
+                    sky_for_backend,
+                    sun_dir,
+                    solar_radiances,
+                    has_sun_source ? 0.999989f : 0.0f  // solar_disk_cos_angle
+                );
+            }
+
+            uint cam = 0;
             for (auto &camera: cameras) {
 
-                // set variable values
-                RT_CHECK_ERROR(rtVariableSet3f(camera_position_RTvariable, camera.second.position.x, camera.second.position.y, camera.second.position.z));
-                helios::SphericalCoord dir = cart2sphere(camera.second.lookat - camera.second.position);
-                RT_CHECK_ERROR(rtVariableSet2f(camera_direction_RTvariable, dir.zenith, dir.azimuth));
-                RT_CHECK_ERROR(rtVariableSet1f(camera_lens_diameter_RTvariable, camera.second.lens_diameter));
-                RT_CHECK_ERROR(rtVariableSet1f(FOV_aspect_RTvariable, camera.second.FOV_aspect_ratio));
-                // Set focal plane distance (working distance for ray generation), not the lens optical focal length
-                RT_CHECK_ERROR(rtVariableSet1f(camera_focal_length_RTvariable, camera.second.focal_length));
 
-                // Calculate effective HFOV considering zoom: effective_HFOV = base_HFOV / zoom
-                float effective_HFOV = camera.second.HFOV_degrees / camera.second.camera_zoom;
-                RT_CHECK_ERROR(rtVariableSet1f(camera_viewplane_length_RTvariable, 0.5f / tanf(0.5f * effective_HFOV * M_PI / 180.f)));
-
-                // Calculate pixel solid angle: Ω_pixel ≈ (angular_size_horizontal) × (angular_size_vertical)
-                // For small angles: Ω ≈ (HFOV/width) × (VFOV/height) in steradians
-                float HFOV_rad = effective_HFOV * M_PI / 180.f; // Use effective_HFOV from above
-                float VFOV_rad = HFOV_rad / camera.second.FOV_aspect_ratio;
-                float pixel_angle_horizontal = HFOV_rad / float(camera.second.resolution.x);
-                float pixel_angle_vertical = VFOV_rad / float(camera.second.resolution.y);
-                float pixel_solid_angle = pixel_angle_horizontal * pixel_angle_vertical; // steradians
-                RT_CHECK_ERROR(rtVariableSet1f(camera_pixel_solid_angle_RTvariable, pixel_solid_angle));
-
-                RT_CHECK_ERROR(rtVariableSet1ui(camera_ID_RTvariable, cam));
-
-                // Set full camera resolution (used for pixel index calculations in ray generation)
-                RT_CHECK_ERROR(rtVariableSet2i(camera_resolution_full_RTvariable, camera.second.resolution.x, camera.second.resolution.y));
-
-                // Allocate full-size buffer (no tiling needed for buffer allocation)
-                zeroBuffer1D(radiation_in_camera_RTbuffer, camera.second.resolution.x * camera.second.resolution.y * Nbands_launch);
-
-                // Calculate total rays and check if tiling is needed
-                size_t total_rays = size_t(camera.second.antialiasing_samples) * size_t(camera.second.resolution.x) * size_t(camera.second.resolution.y);
-
-                // Validate antialiasing samples don't exceed maximum alone
+                // Validate antialiasing samples don't exceed maximum
                 if (camera.second.antialiasing_samples > maxRays) {
-                    helios_runtime_error("ERROR (runBand): Camera '" + camera.second.label + "' antialiasing samples (" + std::to_string(camera.second.antialiasing_samples) + ") exceeds OptiX maximum launch size (" + std::to_string(maxRays) +
-                                         "). Reduce antialiasing samples.");
+                    helios_runtime_error("ERROR (runBand): Camera '" + camera.second.label + "' antialiasing samples (" +
+                                         std::to_string(camera.second.antialiasing_samples) + ") exceeds OptiX maximum launch size (" +
+                                         std::to_string(maxRays) + "). Reduce antialiasing samples.");
                 }
 
-                if (total_rays <= maxRays) {
-                    // No tiling needed - launch entire camera at once
+                // Compute tiling if needed
+                std::vector<CameraTile> tiles = computeCameraTiles(camera.second, maxRays);
 
-                    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, 0));
-                    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, 0));
+                if (message_flag && tiles.size() > 1) {
+                    std::cout << "Camera '" << camera.second.label << "' requires " << tiles.size() << " tiles" << std::endl;
+                }
 
-                    optix::int3 launch_dim_camera = optix::make_int3(camera.second.antialiasing_samples, camera.second.resolution.x, camera.second.resolution.y);
+                // Launch camera rays (tiled or full)
+                for (size_t tile_idx = 0; tile_idx < tiles.size(); tile_idx++) {
+                    const auto& tile = tiles[tile_idx];
 
+                    // Build params for this tile
+                    helios::RayTracingLaunchParams params = buildCameraLaunchParams(
+                        camera.second,
+                        cam,
+                        camera.second.antialiasing_samples,
+                        tile.resolution,
+                        tile.offset
+                    );
+
+                    // Set band parameters (CRITICAL for materials!)
+                    params.num_bands_launch = Nbands_launch;
+                    params.num_bands_global = Nbands_global;
+                    params.random_seed = std::chrono::system_clock::now().time_since_epoch().count();
+                    std::vector<bool> band_flags(band_launch_flag.begin(), band_launch_flag.end());
+                    params.band_launch_flag = band_flags;
+
+                    // Progress message
                     if (message_flag) {
-                        std::cout << "Performing scattering radiation camera ray trace for camera " << camera.second.label << "..." << std::flush;
+                        if (tiles.size() == 1) {
+                            std::cout << "Performing scattering radiation camera ray trace for camera "
+                                      << camera.second.label << "..." << std::flush;
+                        } else {
+                            std::cout << "Performing scattering radiation camera ray trace for camera "
+                                      << camera.second.label << " (tile " << (tile_idx + 1)
+                                      << " of " << tiles.size() << ")..." << std::flush;
+                        }
                     }
 
-                    RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_CAMERA, launch_dim_camera.x, launch_dim_camera.y, launch_dim_camera.z));
+                    // Launch through backend
+                    backend->launchCameraRays(params);
 
                     if (message_flag) {
-                        std::cout << "done." << std::endl;
-                    }
-
-                } else {
-                    // Tiling needed
-
-                    // Calculate tile dimensions - tile along height (z-dimension) to keep width intact when possible
-                    size_t rays_per_row = size_t(camera.second.antialiasing_samples) * size_t(camera.second.resolution.x);
-                    size_t max_rows_per_tile = floor(float(maxRays) / float(rays_per_row));
-
-                    if (max_rows_per_tile == 0) {
-                        // Even one row is too large - need to tile both width and height
-
-                        size_t max_pixels_per_tile = floor(float(maxRays) / float(camera.second.antialiasing_samples));
-
-                        // Choose tile dimensions (try to keep aspect ratio)
-                        float aspect = float(camera.second.resolution.x) / float(camera.second.resolution.y);
-                        size_t tile_width = round(sqrt(max_pixels_per_tile * aspect));
-                        size_t tile_height = floor(float(max_pixels_per_tile) / float(tile_width));
-
-                        // Make sure we don't exceed image dimensions
-                        tile_width = fmin(tile_width, camera.second.resolution.x);
-                        tile_height = fmin(tile_height, camera.second.resolution.y);
-
-                        // Calculate number of tiles in each dimension
-                        int Ntiles_x = ceil(float(camera.second.resolution.x) / float(tile_width));
-                        int Ntiles_y = ceil(float(camera.second.resolution.y) / float(tile_height));
-                        int Ntiles_total = Ntiles_x * Ntiles_y;
-
-                        // Loop over tiles
-                        int tile_num = 0;
-                        for (int tile_y = 0; tile_y < Ntiles_y; tile_y++) {
-                            for (int tile_x = 0; tile_x < Ntiles_x; tile_x++) {
-                                tile_num++;
-
-                                // Calculate tile boundaries
-                                size_t offset_x = tile_x * tile_width;
-                                size_t offset_y = tile_y * tile_height;
-
-                                size_t width_this_tile = fmin(tile_width, camera.second.resolution.x - offset_x);
-                                size_t height_this_tile = fmin(tile_height, camera.second.resolution.y - offset_y);
-
-                                // Set offsets
-                                RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, offset_x));
-                                RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, offset_y));
-
-                                // Set launch dimensions for this tile
-                                optix::int3 launch_dim_camera = optix::make_int3(camera.second.antialiasing_samples, width_this_tile, height_this_tile);
-
-                                if (message_flag) {
-                                    std::cout << "Performing scattering radiation camera ray trace for camera " << camera.second.label << " (tile " << tile_num << " of " << Ntiles_total << ")..." << std::flush;
-                                }
-
-                                RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_CAMERA, launch_dim_camera.x, launch_dim_camera.y, launch_dim_camera.z));
-
-                                if (message_flag) {
-                                    std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
-                                }
-                            }
-                        }
-
-                        if (message_flag) {
-                            std::cout << "Performing scattering radiation camera ray trace for camera " << camera.second.label << "...done." << std::endl;
-                        }
-
-                    } else {
-                        // Tile only along height (simpler case)
-
-                        size_t rows_per_tile = fmin(max_rows_per_tile, camera.second.resolution.y);
-                        int Ntiles = ceil(float(camera.second.resolution.y) / float(rows_per_tile));
-
-                        for (int tile = 0; tile < Ntiles; tile++) {
-                            size_t offset_y = tile * rows_per_tile;
-                            size_t height_this_tile = fmin(rows_per_tile, camera.second.resolution.y - offset_y);
-
-                            RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, 0));
-                            RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, offset_y));
-
-                            optix::int3 launch_dim_camera = optix::make_int3(camera.second.antialiasing_samples, camera.second.resolution.x, height_this_tile);
-
-                            if (message_flag) {
-                                std::cout << "Performing scattering radiation camera ray trace for camera " << camera.second.label << " (tile " << tile + 1 << " of " << Ntiles << ")..." << std::flush;
-                            }
-
-                            RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_CAMERA, launch_dim_camera.x, launch_dim_camera.y, launch_dim_camera.z));
-
-                            if (message_flag) {
-                                std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
-                            }
-                        }
-
-                        if (message_flag) {
-                            std::cout << "Performing scattering radiation camera ray trace for camera " << camera.second.label << "...done." << std::endl;
+                        if (tiles.size() > 1) {
+                            std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
+                        } else {
+                            std::cout << "done." << std::endl;
                         }
                     }
                 }
 
-                std::vector<float> radiation_camera = getOptiXbufferData(radiation_in_camera_RTbuffer);
+                if (message_flag && tiles.size() > 1) {
+                    std::cout << "Performing scattering radiation camera ray trace for camera "
+                              << camera.second.label << "...done." << std::endl;
+                }
 
+                // Get results from backend
+                std::vector<float> radiation_camera;
+                std::vector<uint> dummy_labels;
+                std::vector<float> dummy_depths;
+                backend->getCameraResults(radiation_camera, dummy_labels, dummy_depths,
+                                        cam, camera.second.resolution);
+
+                // Process pixel data (KEEP EXISTING LOGIC)
                 std::string camera_label = camera.second.label;
 
                 for (auto b = 0; b < Nbands_launch; b++) {
@@ -4258,75 +4176,72 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
                 //--- Pixel Labeling Trace ---//
 
-                // Allocate full-size buffers
-                zeroBuffer1D(camera_pixel_label_RTbuffer, camera.second.resolution.x * camera.second.resolution.y);
-                zeroBuffer1D(camera_pixel_depth_RTbuffer, camera.second.resolution.x * camera.second.resolution.y);
+                // Compute tiling for pixel labeling (no antialiasing, 1 ray per pixel)
+                RadiationCamera pixel_label_camera = camera.second;
+                pixel_label_camera.antialiasing_samples = 1;
+                std::vector<CameraTile> pixel_tiles = computeCameraTiles(pixel_label_camera, maxRays);
 
-                // Calculate total rays for pixel labeling (1 ray per pixel, no antialiasing)
-                size_t total_rays_label = size_t(camera.second.resolution.x) * size_t(camera.second.resolution.y);
+                // Launch pixel label rays (tiled or full)
+                for (size_t tile_idx = 0; tile_idx < pixel_tiles.size(); tile_idx++) {
+                    const auto& tile = pixel_tiles[tile_idx];
 
-                if (total_rays_label <= maxRays) {
-                    // No tiling needed
+                    // Build params (reuse buildCameraLaunchParams, antialiasing=1)
+                    helios::RayTracingLaunchParams params = buildCameraLaunchParams(
+                        pixel_label_camera,
+                        cam,
+                        1,  // No antialiasing for pixel labeling
+                        tile.resolution,
+                        tile.offset
+                    );
 
-                    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, 0));
-                    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, 0));
-
+                    // Progress message
                     if (message_flag) {
-                        std::cout << "Performing camera pixel labeling ray trace for camera " << camera.second.label << "..." << std::flush;
-                    }
-
-                    RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_PIXEL_LABEL, 1, camera.second.resolution.x, camera.second.resolution.y));
-
-                    if (message_flag) {
-                        std::cout << "done." << std::endl;
-                    }
-
-                } else {
-                    // Tile along height only (since antialiasing_samples = 1 for pixel labeling)
-
-                    size_t max_rows_per_tile = floor(float(maxRays) / float(camera.second.resolution.x));
-                    size_t rows_per_tile = fmin(max_rows_per_tile, camera.second.resolution.y);
-                    int Ntiles = ceil(float(camera.second.resolution.y) / float(rows_per_tile));
-
-                    for (int tile = 0; tile < Ntiles; tile++) {
-                        size_t offset_y = tile * rows_per_tile;
-                        size_t height_this_tile = fmin(rows_per_tile, camera.second.resolution.y - offset_y);
-
-                        RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, 0));
-                        RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, offset_y));
-
-                        if (message_flag) {
-                            std::cout << "Performing camera pixel labeling ray trace for camera " << camera.second.label << " (tile " << tile + 1 << " of " << Ntiles << ")..." << std::flush;
+                        if (pixel_tiles.size() == 1) {
+                            std::cout << "Performing camera pixel labeling ray trace for camera "
+                                      << camera.second.label << "..." << std::flush;
+                        } else {
+                            std::cout << "Performing camera pixel labeling ray trace for camera "
+                                      << camera.second.label << " (tile " << (tile_idx + 1)
+                                      << " of " << pixel_tiles.size() << ")..." << std::flush;
                         }
+                    }
 
-                        RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_PIXEL_LABEL, 1, camera.second.resolution.x, height_this_tile));
+                    // Launch through backend
+                    backend->launchPixelLabelRays(params);
 
-                        if (message_flag) {
+                    if (message_flag) {
+                        if (pixel_tiles.size() > 1) {
                             std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
+                        } else {
+                            std::cout << "done." << std::endl;
                         }
-                    }
-
-                    if (message_flag) {
-                        std::cout << "Performing camera pixel labeling ray trace for camera " << camera.second.label << "...done." << std::endl;
                     }
                 }
 
-                camera.second.pixel_label_UUID = getOptiXbufferData_ui(camera_pixel_label_RTbuffer);
-                camera.second.pixel_depth = getOptiXbufferData(camera_pixel_depth_RTbuffer);
+                if (message_flag && pixel_tiles.size() > 1) {
+                    std::cout << "Performing camera pixel labeling ray trace for camera "
+                              << camera.second.label << "...done." << std::endl;
+                }
 
-                // the IDs from the ray trace do not necessarily correspond to the actual primitive UUIDs, so look them up.
+                // Get pixel label results
+                std::vector<float> dummy_pixel_data;
+                backend->getCameraResults(dummy_pixel_data,
+                                        camera.second.pixel_label_UUID,
+                                        camera.second.pixel_depth,
+                                        cam, camera.second.resolution);
+
+                // Convert IDs to actual UUIDs (KEEP EXISTING LOGIC)
                 for (uint ID = 0; ID < camera.second.pixel_label_UUID.size(); ID++) {
                     if (camera.second.pixel_label_UUID.at(ID) > 0) {
                         camera.second.pixel_label_UUID.at(ID) = context_UUIDs.at(camera.second.pixel_label_UUID.at(ID) - 1) + 1;
                     }
                 }
 
+                // Store results in context (KEEP EXISTING LOGIC)
                 std::string data_label = "camera_" + camera_label + "_pixel_UUID";
-
                 context->setGlobalData(data_label.c_str(), camera.second.pixel_label_UUID);
 
                 data_label = "camera_" + camera_label + "_pixel_depth";
-
                 context->setGlobalData(data_label.c_str(), camera.second.pixel_depth);
 
                 cam++;
@@ -6490,6 +6405,113 @@ void sutilReportError(const char *message) {
         MessageBox(0, s, "OptiX Error", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
     }
 #endif
+}
+
+helios::RayTracingLaunchParams RadiationModel::buildCameraLaunchParams(
+    const RadiationCamera& camera,
+    uint camera_id,
+    uint antialiasing_samples,
+    const helios::int2& tile_resolution,
+    const helios::int2& tile_offset) {
+
+    helios::RayTracingLaunchParams params;
+
+    // Camera position and orientation
+    params.camera_position = camera.position;
+    helios::SphericalCoord dir = cart2sphere(camera.lookat - camera.position);
+    params.camera_direction = helios::make_vec2(dir.zenith, dir.azimuth);
+
+    // Camera optical properties
+    params.camera_focal_length = camera.focal_length;
+    params.camera_lens_diameter = camera.lens_diameter;
+    params.camera_fov_aspect = camera.FOV_aspect_ratio;
+
+    // Resolution and tiling
+    params.camera_resolution = tile_resolution;
+    params.camera_resolution_full = camera.resolution;
+    params.camera_pixel_offset = tile_offset;
+    params.antialiasing_samples = antialiasing_samples;
+    params.camera_id = camera_id;
+
+    // Compute effective HFOV with zoom
+    float effective_HFOV = camera.HFOV_degrees / camera.camera_zoom;
+    params.camera_HFOV = effective_HFOV * M_PI / 180.0f;
+    params.camera_viewplane_length = 0.5f / tanf(0.5f * effective_HFOV * M_PI / 180.f);
+
+    // Compute pixel solid angle
+    float HFOV_rad = effective_HFOV * M_PI / 180.f;
+    float VFOV_rad = HFOV_rad / camera.FOV_aspect_ratio;
+    float pixel_angle_h = HFOV_rad / float(camera.resolution.x);
+    float pixel_angle_v = VFOV_rad / float(camera.resolution.y);
+    params.camera_pixel_solid_angle = pixel_angle_h * pixel_angle_v;
+
+    return params;
+}
+
+std::vector<CameraTile> RadiationModel::computeCameraTiles(
+    const RadiationCamera& camera,
+    size_t maxRays) {
+
+    std::vector<CameraTile> tiles;
+
+    size_t total_rays = size_t(camera.antialiasing_samples) *
+                       size_t(camera.resolution.x) *
+                       size_t(camera.resolution.y);
+
+    // No tiling needed
+    if (total_rays <= maxRays) {
+        tiles.push_back({camera.resolution, helios::make_int2(0, 0)});
+        return tiles;
+    }
+
+    // Calculate tile dimensions
+    size_t rays_per_row = size_t(camera.antialiasing_samples) * size_t(camera.resolution.x);
+    size_t max_rows_per_tile = floor(float(maxRays) / float(rays_per_row));
+
+    if (max_rows_per_tile == 0) {
+        // 2D tiling - even one row is too large
+        size_t max_pixels_per_tile = floor(float(maxRays) / float(camera.antialiasing_samples));
+
+        float aspect = float(camera.resolution.x) / float(camera.resolution.y);
+        size_t tile_width = round(sqrt(max_pixels_per_tile * aspect));
+        size_t tile_height = floor(float(max_pixels_per_tile) / float(tile_width));
+
+        tile_width = std::min(tile_width, size_t(camera.resolution.x));
+        tile_height = std::min(tile_height, size_t(camera.resolution.y));
+
+        int Ntiles_x = ceil(float(camera.resolution.x) / float(tile_width));
+        int Ntiles_y = ceil(float(camera.resolution.y) / float(tile_height));
+
+        for (int ty = 0; ty < Ntiles_y; ty++) {
+            for (int tx = 0; tx < Ntiles_x; tx++) {
+                size_t offset_x = tx * tile_width;
+                size_t offset_y = ty * tile_height;
+                size_t width_this = std::min(tile_width, camera.resolution.x - offset_x);
+                size_t height_this = std::min(tile_height, camera.resolution.y - offset_y);
+
+                tiles.push_back({
+                    helios::make_int2(width_this, height_this),
+                    helios::make_int2(offset_x, offset_y)
+                });
+            }
+        }
+    } else {
+        // 1D tiling - tile along height only
+        size_t rows_per_tile = std::min(max_rows_per_tile, size_t(camera.resolution.y));
+        int Ntiles = ceil(float(camera.resolution.y) / float(rows_per_tile));
+
+        for (int t = 0; t < Ntiles; t++) {
+            size_t offset_y = t * rows_per_tile;
+            size_t height_this = std::min(rows_per_tile, camera.resolution.y - offset_y);
+
+            tiles.push_back({
+                helios::make_int2(camera.resolution.x, height_this),
+                helios::make_int2(0, offset_y)
+            });
+        }
+    }
+
+    return tiles;
 }
 
 void RadiationModel::buildGeometryData() {

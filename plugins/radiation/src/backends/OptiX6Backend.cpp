@@ -397,6 +397,9 @@ void OptiX6Backend::initialize() {
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "FOV_aspect_ratio", &FOV_aspect_ratio_RTvariable));
     RT_CHECK_ERROR(rtVariableSet1f(FOV_aspect_ratio_RTvariable, 1.f));
 
+    RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "camera_HFOV", &camera_HFOV_RTvariable));
+    RT_CHECK_ERROR(rtVariableSet1f(camera_HFOV_RTvariable, 0.f));
+
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "camera_focal_length", &camera_focal_length_RTvariable));
     RT_CHECK_ERROR(rtVariableSet1f(camera_focal_length_RTvariable, 0.f));
 
@@ -414,6 +417,9 @@ void OptiX6Backend::initialize() {
 
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "camera_ID", &camera_ID_RTvariable));
     RT_CHECK_ERROR(rtVariableSet1ui(camera_ID_RTvariable, 0));
+
+    RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "camera_resolution_full", &camera_resolution_full_RTvariable));
+    RT_CHECK_ERROR(rtVariableSet2i(camera_resolution_full_RTvariable, 0, 0));
 
     // Sun direction for sky model
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "sun_direction", &sun_direction_RTvariable));
@@ -609,6 +615,7 @@ void OptiX6Backend::launchCameraRays(const RayTracingLaunchParams& params) {
         helios_runtime_error("ERROR (OptiX6Backend::launchCameraRays): Backend not initialized.");
     }
 
+
     // Set common launch parameters
     launchParamsToVariables(params);
 
@@ -626,16 +633,36 @@ void OptiX6Backend::launchCameraRays(const RayTracingLaunchParams& params) {
     RT_CHECK_ERROR(rtVariableSet1f(camera_lens_diameter_RTvariable, params.camera_lens_diameter));
     RT_CHECK_ERROR(rtVariableSet1f(FOV_aspect_ratio_RTvariable, params.camera_fov_aspect));
 
+    // Debug: check camera_HFOV value
+    if (std::isnan(params.camera_HFOV) || std::isinf(params.camera_HFOV)) {
+    }
+
+    RT_CHECK_ERROR(rtVariableSet1f(camera_HFOV_RTvariable, params.camera_HFOV));
+
     RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, params.camera_pixel_offset.x));
     RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, params.camera_pixel_offset.y));
     RT_CHECK_ERROR(rtVariableSet1ui(camera_ID_RTvariable, params.camera_id));
 
+    // Set the 3 new camera parameters
+    RT_CHECK_ERROR(rtVariableSet1f(camera_viewplane_length_RTvariable, params.camera_viewplane_length));
+    RT_CHECK_ERROR(rtVariableSet1f(camera_pixel_solid_angle_RTvariable, params.camera_pixel_solid_angle));
+    RT_CHECK_ERROR(rtVariableSet2i(camera_resolution_full_RTvariable,
+                                  params.camera_resolution_full.x,
+                                  params.camera_resolution_full.y));
+
+    // Resize camera buffer for full resolution (not tile resolution!)
+    size_t total_pixels = params.camera_resolution_full.x * params.camera_resolution_full.y;
+    size_t buffer_size = total_pixels * params.num_bands_launch;
+    if (buffer_size > 0) {
+        zeroBuffer1D(radiation_in_camera_RTbuffer, buffer_size);
+    }
+
     // Validate context to ensure acceleration structure is built and buffers are synchronized
     RT_CHECK_ERROR(rtContextValidate(OptiX_Context));
 
-    // Launch camera rays: dimension = (1, resolution.x, resolution.y) for pixel sampling
+    // Launch camera rays: dimension = (antialiasing_samples, resolution.x, resolution.y) for pixel sampling
     RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_CAMERA,
-                                    1,
+                                    params.antialiasing_samples,
                                     params.camera_resolution.x,
                                     params.camera_resolution.y));
 }
@@ -648,7 +675,21 @@ void OptiX6Backend::launchPixelLabelRays(const RayTracingLaunchParams& params) {
     // Set launch parameters (camera parameters should already be set)
     launchParamsToVariables(params);
 
-    // Launch pixel label rays: dimension = (1, resolution.x, resolution.y)
+    // Set the 3 camera parameters (needed for pixel coordinate calculations)
+    RT_CHECK_ERROR(rtVariableSet1f(camera_viewplane_length_RTvariable, params.camera_viewplane_length));
+    RT_CHECK_ERROR(rtVariableSet1f(camera_pixel_solid_angle_RTvariable, params.camera_pixel_solid_angle));
+    RT_CHECK_ERROR(rtVariableSet2i(camera_resolution_full_RTvariable,
+                                  params.camera_resolution_full.x,
+                                  params.camera_resolution_full.y));
+
+    // Resize pixel label and depth buffers for full resolution
+    size_t total_pixels = params.camera_resolution_full.x * params.camera_resolution_full.y;
+    if (total_pixels > 0) {
+        zeroBuffer1D(camera_pixel_label_RTbuffer, total_pixels);
+        zeroBuffer1D(camera_pixel_depth_RTbuffer, total_pixels);
+    }
+
+    // Launch pixel label rays: dimension = (1, resolution.x, resolution.y) - no antialiasing
     RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_PIXEL_LABEL,
                                     1,
                                     params.camera_resolution.x,

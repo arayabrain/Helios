@@ -216,6 +216,9 @@ struct RayTracingLaunchParams {
     float camera_HFOV = 0.0f;                   //!< Horizontal field of view (radians)
     uint antialiasing_samples = 1;              //!< Antialiasing samples per pixel
     helios::int2 camera_pixel_offset;           //!< Pixel offset for tiled rendering
+    float camera_viewplane_length = 0.0f;       //!< Viewplane length computed from effective_HFOV/zoom
+    float camera_pixel_solid_angle = 0.0f;      //!< Pixel solid angle in steradians
+    helios::int2 camera_resolution_full;        //!< Full resolution for tiled rendering (global coordinates)
 
     // Diffuse radiation parameters (for diffuse ray launches)
     std::vector<float> diffuse_flux;            //!< Diffuse flux per band

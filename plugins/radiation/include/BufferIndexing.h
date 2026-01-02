@@ -379,10 +379,19 @@ struct PixelCoordinate {
      * @param full_resolution Global camera resolution (width, height)
      * @return Flattened index: y * width + x (always row-major)
      */
-    HELIOS_HOST_DEVICE inline
+#ifdef __CUDACC__
+    // CUDA version: use int2 (built-in CUDA type)
+    __host__ __device__ inline
+    size_t toFlatIndex(const int2& full_resolution) const {
+        return static_cast<size_t>(y) * full_resolution.x + x;
+    }
+#else
+    // CPU version: use helios::int2
+    inline
     size_t toFlatIndex(const helios::int2& full_resolution) const {
         return static_cast<size_t>(y) * full_resolution.x + x;
     }
+#endif
 
 // CUDA-specific factory methods (use OptiX types)
 #ifdef __CUDACC__
@@ -466,7 +475,11 @@ struct PixelCoordinate {
 class SubpatchUUIDCalculator {
 private:
     uint base_UUID_;   ///< Base UUID for first subpatch
-    helios::int2 subdivisions_; ///< Subdivision counts (x, y)
+#ifdef __CUDACC__
+    int2 subdivisions_; ///< Subdivision counts (x, y) - CUDA version
+#else
+    helios::int2 subdivisions_; ///< Subdivision counts (x, y) - CPU version
+#endif
 
 public:
     /**
@@ -474,10 +487,16 @@ public:
      * @param base_UUID UUID of first subpatch (at position 0,0)
      * @param subdivisions Subdivision counts in x and y directions
      */
-    HELIOS_HOST_DEVICE
+#ifdef __CUDACC__
+    __host__ __device__
+    SubpatchUUIDCalculator(uint base_UUID, int2 subdivisions)
+        : base_UUID_(base_UUID)
+        , subdivisions_(subdivisions) {}
+#else
     SubpatchUUIDCalculator(uint base_UUID, helios::int2 subdivisions)
         : base_UUID_(base_UUID)
         , subdivisions_(subdivisions) {}
+#endif
 
     /**
      * @brief Get UUID for subpatch at (col, row) position
@@ -506,10 +525,16 @@ public:
      * @brief Get subdivisions (useful for loop bounds)
      * @return Subdivision counts as int2
      */
-    HELIOS_HOST_DEVICE
+#ifdef __CUDACC__
+    __host__ __device__
+    int2 getSubdivisions() const {
+        return subdivisions_;
+    }
+#else
     helios::int2 getSubdivisions() const {
         return subdivisions_;
     }
+#endif
 };
 
 #endif // HELIOS_BUFFER_INDEXING_H

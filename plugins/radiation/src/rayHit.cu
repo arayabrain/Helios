@@ -261,8 +261,12 @@ RT_PROGRAM void closest_hit_camera() {
         return;
     }
 
+    // For cameras, origin_UUID is actually the pixel index (not a primitive UUID!)
+    uint pixel_index = prd.origin_UUID;
+    size_t Npixels = camera_resolution_full.x * camera_resolution_full.y;
+
     // Create indexers
-    RadiationBufferIndexer rad_indexer(Nprimitives, Nbands_launch);
+    RadiationBufferIndexer rad_indexer(Npixels, Nbands_launch);  // Use Npixels for camera radiation buffer
     SourceFluxIndexer source_flux_indexer(Nsources, Nbands_launch);
     SpecularRadiationIndexer spec_indexer(Nsources, Ncameras, Nprimitives, Nbands_launch);
 
@@ -480,10 +484,9 @@ RT_PROGRAM void closest_hit_camera() {
             }
 
             // absorption
-            // Convert origin UUID to position
-            uint origin_position = primitive_positions[prd.origin_UUID];
-            // Use BufferIndexer: [primitive][band]
-            size_t ind_camera = rad_indexer(origin_position, b);
+            // For cameras, use pixel index directly (no UUID lookup needed)
+            // Use BufferIndexer: [pixel][band]
+            size_t ind_camera = rad_indexer(pixel_index, b);
 
             atomicAdd(&radiation_in_camera[ind_camera],
                       (strength + strength_spec) / M_PI); // note: pi factor is to convert from flux to intensity assuming surface is Lambertian. We don't multiply by the solid angle by convention to avoid very small numbers.
@@ -730,11 +733,12 @@ RT_PROGRAM void miss_diffuse() {
 
 RT_PROGRAM void miss_camera() {
 
-    // Convert UUID to array position
-    uint origin_position = primitive_positions[prd.origin_UUID];
+    // For cameras, origin_UUID is actually the pixel index (not a primitive UUID!)
+    uint pixel_index = prd.origin_UUID;
+    size_t Npixels = camera_resolution_full.x * camera_resolution_full.y;
 
     // Create indexer
-    RadiationBufferIndexer rad_indexer(Nprimitives, Nbands_launch);
+    RadiationBufferIndexer rad_indexer(Npixels, Nbands_launch);  // Use Npixels for camera radiation buffer
 
     for (size_t b = 0; b < Nbands_launch; b++) {
 
@@ -796,8 +800,8 @@ RT_PROGRAM void miss_camera() {
             // Accumulate radiance directly (same as surface hits accumulate radiation_out)
             // Units: W/m²/sr
             // Monte Carlo averaging: prd.strength = 1/N_rays
-            // Use BufferIndexer: [primitive][band]
-            size_t ind_camera = rad_indexer(origin_position, b);
+            // Use BufferIndexer: [pixel][band]
+            size_t ind_camera = rad_indexer(pixel_index, b);
             atomicAdd(&radiation_in_camera[ind_camera], radiance * prd.strength);
         }
     }

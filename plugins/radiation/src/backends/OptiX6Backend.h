@@ -341,6 +341,7 @@ private:
     RTvariable camera_pixel_offset_x_RTvariable;
     RTvariable camera_pixel_offset_y_RTvariable;
     RTvariable camera_ID_RTvariable;
+    RTvariable camera_resolution_full_RTvariable;
     RTvariable specular_reflection_enabled_RTvariable;
     RTvariable scattering_iteration_RTvariable;
 
