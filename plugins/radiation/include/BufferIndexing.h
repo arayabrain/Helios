@@ -465,7 +465,7 @@ struct PixelCoordinate {
  */
 class SubpatchUUIDCalculator {
 private:
-    uint base_UUID_;            ///< Base UUID for first subpatch
+    uint base_UUID_;   ///< Base UUID for first subpatch
     helios::int2 subdivisions_; ///< Subdivision counts (x, y)
 
 public:
@@ -506,7 +506,7 @@ public:
      * @brief Get subdivisions (useful for loop bounds)
      * @return Subdivision counts as int2
      */
-    HELIOS_HOST_DEVICE inline
+    HELIOS_HOST_DEVICE
     helios::int2 getSubdivisions() const {
         return subdivisions_;
     }
