@@ -3810,15 +3810,15 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
         size_t maxPrims = floor(float(maxRays) / float(rays_per_primitive));
 
-        int Nlaunches = ceil(rays_per_primitive * Nobjects / float(maxRays));
+        int Nlaunches = ceil(rays_per_primitive * Nprimitives / float(maxRays));
 
-        size_t prims_per_launch = fmin(Nobjects, maxPrims);
+        size_t prims_per_launch = fmin(Nprimitives, maxPrims);
 
         for (uint launch = 0; launch < Nlaunches; launch++) {
 
             size_t prims_this_launch;
-            if ((launch + 1) * prims_per_launch > Nobjects) {
-                prims_this_launch = Nobjects - launch * prims_per_launch;
+            if ((launch + 1) * prims_per_launch > Nprimitives) {
+                prims_this_launch = Nprimitives - launch * prims_per_launch;
             } else {
                 prims_this_launch = prims_per_launch;
             }
@@ -3950,8 +3950,8 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             for (uint launch = 0; launch < Nlaunches; launch++) {
 
                 size_t prims_this_launch;
-                if ((launch + 1) * prims_per_launch > Nobjects) {
-                    prims_this_launch = Nobjects - launch * prims_per_launch;
+                if ((launch + 1) * prims_per_launch > Nprimitives) {
+                    prims_this_launch = Nprimitives - launch * prims_per_launch;
                 } else {
                     prims_this_launch = prims_per_launch;
                 }
@@ -6844,7 +6844,7 @@ void RadiationModel::buildGeometryData() {
             geometry_data.primitive_types[bbox_pos] = 5; // type=5 for bbox
             geometry_data.twosided_flags[bbox_pos] = 1; // bboxes are two-sided
             geometry_data.solid_fractions[bbox_pos] = 1.0f; // bboxes are fully solid
-            geometry_data.object_IDs[bbox_pos] = UINT_MAX; // no parent object
+            geometry_data.object_IDs[bbox_pos] = geometry_data.primitive_count + i; // Match master: Nobjects + i
             geometry_data.object_subdivisions[bbox_pos] = make_int2(1, 1); // no subdivisions
             geometry_data.primitive_IDs[bbox_pos] = bbox_UUID_base + i; // bbox UUID
 

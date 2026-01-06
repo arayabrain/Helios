@@ -737,8 +737,9 @@ void OptiX6Backend::zeroRadiationBuffers() {
     }
 
     // Zero all radiation result buffers
-    // Include bbox entries when periodic boundaries are enabled
-    size_t buffer_size = (current_primitive_count + current_bbox_count) * current_band_count;
+    // Note: Bbox primitives don't accumulate radiation (they only wrap rays),
+    // so buffers are sized for real primitives only
+    size_t buffer_size = current_primitive_count * current_band_count;
     if (buffer_size > 0) {
         zeroBuffer1D(radiation_in_RTbuffer, buffer_size);
         zeroBuffer1D(radiation_out_top_RTbuffer, buffer_size);
@@ -754,8 +755,7 @@ void OptiX6Backend::zeroRadiationBuffers() {
     }
 
     // Zero specular buffer (indexed by source, camera, primitive, band)
-    // Include bbox entries when periodic boundaries are enabled
-    size_t specular_size = current_source_count * current_camera_count * (current_primitive_count + current_bbox_count) * current_band_count;
+    size_t specular_size = current_source_count * current_camera_count * current_primitive_count * current_band_count;
     if (specular_size > 0) {
         zeroBuffer1D(radiation_specular_RTbuffer, specular_size);
     }
@@ -772,16 +772,14 @@ void OptiX6Backend::zeroScatterBuffers() {
     }
 
     // Zero scatter buffers
-    // Include bbox entries when periodic boundaries are enabled
-    size_t buffer_size = (current_primitive_count + current_bbox_count) * current_band_count;
+    size_t buffer_size = current_primitive_count * current_band_count;
     if (buffer_size > 0) {
         zeroBuffer1D(scatter_buff_top_RTbuffer, buffer_size);
         zeroBuffer1D(scatter_buff_bottom_RTbuffer, buffer_size);
     }
 
     // Zero camera scatter buffers
-    // Include bbox entries when periodic boundaries are enabled
-    size_t cam_scatter_size = current_camera_count * (current_primitive_count + current_bbox_count) * current_band_count;
+    size_t cam_scatter_size = current_camera_count * current_primitive_count * current_band_count;
     if (cam_scatter_size > 0) {
         zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
         zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);

@@ -4877,10 +4877,12 @@ DOCTEST_TEST_CASE("RadiationModel - FOV_aspect_ratio Deprecation") {
         // FOV_aspect_ratio left at default (0.0)
 
         // Should not produce any warning
-        capture_cerr captured_cerr;
-        radiationmodel.addRadiationCamera("test_camera_1", {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
-
-        std::string stderr_output = captured_cerr.get_captured_output();
+        std::string stderr_output;
+        {
+            capture_cerr captured_cerr;
+            radiationmodel.addRadiationCamera("test_camera_1", {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
+            stderr_output = captured_cerr.get_captured_output();
+        }  // capture destroyed here
         DOCTEST_CHECK(stderr_output.empty());
 
         // Verify FOV_aspect_ratio was auto-calculated correctly
@@ -4897,10 +4899,12 @@ DOCTEST_TEST_CASE("RadiationModel - FOV_aspect_ratio Deprecation") {
         camera_props.FOV_aspect_ratio = 1.5f; // Explicitly set to non-zero value
 
         // Should produce deprecation warning
-        capture_cerr captured_cerr;
-        radiationmodel.addRadiationCamera("test_camera_2", {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
-
-        std::string stderr_output = captured_cerr.get_captured_output();
+        std::string stderr_output;
+        {
+            capture_cerr captured_cerr;
+            radiationmodel.addRadiationCamera("test_camera_2", {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
+            stderr_output = captured_cerr.get_captured_output();
+        }  // capture destroyed here
         DOCTEST_CHECK(stderr_output.find("WARNING") != std::string::npos);
         DOCTEST_CHECK(stderr_output.find("FOV_aspect_ratio") != std::string::npos);
         DOCTEST_CHECK(stderr_output.find("deprecated") != std::string::npos);
@@ -4924,11 +4928,13 @@ DOCTEST_TEST_CASE("RadiationModel - FOV_aspect_ratio Deprecation") {
 
             std::string camera_label = "camera_" + std::to_string(resolution.x) + "x" + std::to_string(resolution.y);
 
-            capture_cerr captured_cerr;
-            radiationmodel.addRadiationCamera(camera_label, {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
-
             // Should not produce any warning
-            std::string stderr_output = captured_cerr.get_captured_output();
+            std::string stderr_output;
+            {
+                capture_cerr captured_cerr;
+                radiationmodel.addRadiationCamera(camera_label, {"test"}, make_vec3(0, 0, 2), make_vec3(0, 0, 0), camera_props, 1);
+                stderr_output = captured_cerr.get_captured_output();
+            }  // capture destroyed here
             DOCTEST_CHECK(stderr_output.empty());
         }
     }
@@ -4961,6 +4967,7 @@ DOCTEST_TEST_CASE("RadiationModel Atmospheric Sky Model for Camera") {
     DOCTEST_SUBCASE("Sky model requires wavelength bounds with uniform response") {
         // Test that error is thrown if wavelength bounds not set for uniform camera response
         radiationmodel.addRadiationBand("VIS"); // No wavelength bounds - will cause error
+        radiationmodel.setScatteringDepth("VIS", 1); // Enable scattering so camera rendering code path is executed
         radiationmodel.setDirectRayCount("VIS", 100);
         radiationmodel.setDiffuseRayCount("VIS", 100);
         radiationmodel.disableEmission("VIS");
