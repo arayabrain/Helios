@@ -17,6 +17,7 @@
 #define HELIOS_BUFFER_INDEXING_H
 
 #include <cstddef>
+#include <climits>
 
 /**
  * @brief Type-safe buffer indexing utilities for multi-dimensional arrays
