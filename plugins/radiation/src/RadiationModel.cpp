@@ -2780,9 +2780,6 @@ std::vector<float> RadiationModel::updateAtmosphericSkyModel(const std::vector<s
         sun_dir.normalize();
     }
 
-    // Set sun direction GPU variable
-    RT_CHECK_ERROR(rtVariableSet3f(sun_direction_RTvariable, sun_dir.x, sun_dir.y, sun_dir.z));
-
     // Compute per-band sky radiance parameters
     std::vector<optix::float4> sky_params(Nbands_launch);
 
@@ -2945,9 +2942,7 @@ std::vector<float> RadiationModel::updateAtmosphericSkyModel(const std::vector<s
         sky_params[b] = optix::make_float4(integrated_circ_str, integrated_circ_width, integrated_horiz_bright, integrated_norm);
     }
 
-    // Upload to GPU buffer
-    initializeBuffer1Dfloat4(sky_radiance_params_RTbuffer, sky_params);
-
+    // Sky parameters will be uploaded to backend via updateSkyModel()
     return sky_base_radiances;
 }
 
@@ -3408,7 +3403,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
     // Initialize camera sky radiance buffer to zeros (will be set per-camera if atmospheric model is used)
     std::vector<float> camera_sky_radiance(Nbands_launch, 0.0f);
-    initializeBuffer1Df(camera_sky_radiance_RTbuffer, camera_sky_radiance);
 
     // Update Prague parameters for general diffuse (if available in Context)
     // This must be done before uploading diffuse parameters to GPU
@@ -3452,7 +3446,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             const auto &params = radiation_bands.at(band_labels.at(b)).diffusePragueParams;
             prague_params.at(b) = optix::make_float4(params.x, params.y, params.z, params.w);
         }
-        initializeBuffer1Dfloat4(sky_radiance_params_RTbuffer, prague_params);
+        // Prague params will be uploaded to backend via updateSkyModel() during scattering
     }
 
     // Determine whether emission is enabled for any band
@@ -3595,11 +3589,10 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 }
             }
 
-            // Upload camera-weighted source fluxes to GPU BEFORE ray tracing
-            initializeBuffer1Df(source_fluxes_cam_RTbuffer, source_fluxes_cam);
+            // Camera-weighted source fluxes already uploaded via backend->updateSources()
         }
 
-        // -- Ray Trace (Phase 1: Using Backend) -- //
+        // -- Ray Trace (Using Backend) -- //
 
         if (message_flag) {
             std::cout << "Performing primary direct radiation ray trace for bands ";
@@ -3670,22 +3663,20 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
     // --- Diffuse/Emission launch ---- //
 
+    // Camera scatter accumulation vectors (broader scope for later upload)
+    std::vector<float> scatter_top_cam;
+    std::vector<float> scatter_bottom_cam;
+    if (Ncameras > 0) {
+        scatter_top_cam.resize(Nprimitives * Nbands_launch, 0.0f);
+        scatter_bottom_cam.resize(Nprimitives * Nbands_launch, 0.0f);
+    }
+
     if (emissionenabled || diffuseenabled) {
 
         // add any emitted energy to the outgoing energy buffer
         if (emissionenabled) {
             // Update primitive outgoing emission
             float eps, temperature;
-
-            void *ptr;
-            float *scatter_buff_top_cam_data, *scatter_buff_bottom_cam_data;
-            if (Ncameras > 0) {
-                // add emitted flux to camera scattered energy buffer
-                RT_CHECK_ERROR(rtBufferMap(scatter_buff_top_cam_RTbuffer, &ptr));
-                scatter_buff_top_cam_data = (float *) ptr;
-                RT_CHECK_ERROR(rtBufferMap(scatter_buff_bottom_cam_RTbuffer, &ptr));
-                scatter_buff_bottom_cam_data = (float *) ptr;
-            }
 
             // Create indexer for emission flux buffers
             RadiationBufferIndexer emission_indexer(Nprimitives, Nbands_launch);
@@ -3717,22 +3708,18 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                         float out_top = sigma * eps * pow(temperature, 4);
                         flux_top.at(ind) += out_top;
                         if (Ncameras > 0) {
-                            scatter_buff_top_cam_data[ind] += out_top;
+                            scatter_top_cam[ind] += out_top;
                         }
                         // Check twosided_flag - check material first, then primitive data
                         uint twosided_flag = context->getPrimitiveTwosidedFlag(p, 1);
                         if (twosided_flag != 0) { // If two-sided, emit from bottom face too
                             flux_bottom.at(ind) += flux_top.at(ind);
                             if (Ncameras > 0) {
-                                scatter_buff_bottom_cam_data[ind] += out_top;
+                                scatter_bottom_cam[ind] += out_top;
                             }
                         }
                     }
                 }
-            }
-            if (Ncameras > 0) {
-                RT_CHECK_ERROR(rtBufferUnmap(scatter_buff_top_cam_RTbuffer));
-                RT_CHECK_ERROR(rtBufferUnmap(scatter_buff_bottom_cam_RTbuffer));
             }
 
         }
@@ -3945,9 +3932,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     // **** CAMERA RAY TRACE **** //
     if (Ncameras > 0) {
 
-        // Set scattering iteration to 0 for specular calculation (specular only computed on first iteration)
-        RT_CHECK_ERROR(rtVariableSet1ui(scattering_iteration_RTvariable, 0));
-
         // Setup solar disk rendering for cameras (enables lens flare effects)
         // Find sun-like sources (collimated or sun_sphere) and compute solar disk radiance
         vec3 sun_dir(0, 0, 1); // Default zenith
@@ -3982,9 +3966,10 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
         }
 
         if (scatteringenabled && (emissionenabled || diffuseenabled || rundirect)) {
-            // re-set outgoing radiation buffers
-            copyBuffer1D(scatter_buff_top_cam_RTbuffer, radiation_out_top_RTbuffer);
-            copyBuffer1D(scatter_buff_bottom_cam_RTbuffer, radiation_out_bottom_RTbuffer);
+            // Upload camera scatter to backend for scattering iterations
+            if (Ncameras > 0) {
+                backend->uploadRadiationOut(scatter_top_cam, scatter_bottom_cam);
+            }
 
             // re-set diffuse radiation fluxes (will be passed via launch params)
             if (diffuseenabled) {
@@ -4247,11 +4232,12 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
 float RadiationModel::getSkyEnergy() {
 
-    std::vector<float> Rsky_SW;
-    Rsky_SW = getOptiXbufferData(Rsky_RTbuffer);
+    helios::RayTracingResults results;
+    backend->getRadiationResults(results);
+
     float Rsky = 0.f;
-    for (size_t i = 0; i < Rsky_SW.size(); i++) {
-        Rsky += Rsky_SW.at(i);
+    for (size_t i = 0; i < results.sky_energy.size(); i++) {
+        Rsky += results.sky_energy.at(i);
     }
     return Rsky;
 }
