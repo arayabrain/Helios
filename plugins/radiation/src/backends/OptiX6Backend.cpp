@@ -109,6 +109,9 @@ void OptiX6Backend::initialize() {
     RT_CHECK_ERROR(rtProgramCreateFromPTXFile(OptiX_Context, intersect_ptx_path.c_str(), "voxel_intersect", &voxel_intersect));
     RT_CHECK_ERROR(rtProgramCreateFromPTXFile(OptiX_Context, intersect_ptx_path.c_str(), "voxel_bounds", &voxel_bounds));
 
+    RT_CHECK_ERROR(rtProgramCreateFromPTXFile(OptiX_Context, intersect_ptx_path.c_str(), "bbox_intersect", &bbox_intersect));
+    RT_CHECK_ERROR(rtProgramCreateFromPTXFile(OptiX_Context, intersect_ptx_path.c_str(), "bbox_bounds", &bbox_bounds));
+
     /* Create geometry objects for each primitive type */
 
     // Patch geometry
@@ -138,8 +141,8 @@ void OptiX6Backend::initialize() {
 
     // Bbox geometry
     RT_CHECK_ERROR(rtGeometryCreate(OptiX_Context, &bbox_geometry));
-    RT_CHECK_ERROR(rtGeometrySetBoundingBoxProgram(bbox_geometry, voxel_bounds)); // bbox uses voxel programs
-    RT_CHECK_ERROR(rtGeometrySetIntersectionProgram(bbox_geometry, voxel_intersect));
+    RT_CHECK_ERROR(rtGeometrySetBoundingBoxProgram(bbox_geometry, bbox_bounds));
+    RT_CHECK_ERROR(rtGeometrySetIntersectionProgram(bbox_geometry, bbox_intersect));
 
     /* Create materials for each primitive type */
 
@@ -734,7 +737,8 @@ void OptiX6Backend::zeroRadiationBuffers() {
     }
 
     // Zero all radiation result buffers
-    size_t buffer_size = current_primitive_count * current_band_count;
+    // Include bbox entries when periodic boundaries are enabled
+    size_t buffer_size = (current_primitive_count + current_bbox_count) * current_band_count;
     if (buffer_size > 0) {
         zeroBuffer1D(radiation_in_RTbuffer, buffer_size);
         zeroBuffer1D(radiation_out_top_RTbuffer, buffer_size);
@@ -750,7 +754,8 @@ void OptiX6Backend::zeroRadiationBuffers() {
     }
 
     // Zero specular buffer (indexed by source, camera, primitive, band)
-    size_t specular_size = current_source_count * current_camera_count * current_primitive_count * current_band_count;
+    // Include bbox entries when periodic boundaries are enabled
+    size_t specular_size = current_source_count * current_camera_count * (current_primitive_count + current_bbox_count) * current_band_count;
     if (specular_size > 0) {
         zeroBuffer1D(radiation_specular_RTbuffer, specular_size);
     }
@@ -767,14 +772,16 @@ void OptiX6Backend::zeroScatterBuffers() {
     }
 
     // Zero scatter buffers
-    size_t buffer_size = current_primitive_count * current_band_count;
+    // Include bbox entries when periodic boundaries are enabled
+    size_t buffer_size = (current_primitive_count + current_bbox_count) * current_band_count;
     if (buffer_size > 0) {
         zeroBuffer1D(scatter_buff_top_RTbuffer, buffer_size);
         zeroBuffer1D(scatter_buff_bottom_RTbuffer, buffer_size);
     }
 
     // Zero camera scatter buffers
-    size_t cam_scatter_size = current_camera_count * current_primitive_count * current_band_count;
+    // Include bbox entries when periodic boundaries are enabled
+    size_t cam_scatter_size = current_camera_count * (current_primitive_count + current_bbox_count) * current_band_count;
     if (cam_scatter_size > 0) {
         zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
         zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);
@@ -1408,13 +1415,14 @@ void OptiX6Backend::geometryToBuffers(const RayTracingGeometry& geometry) {
         initializeBuffer1Dui(voxel_UUID_RTbuffer, geometry.voxels.UUIDs);
     }
 
-    // Bbox vertices: std::vector<vec3> → 2D buffer [bbox][8]
+    // Bbox vertices: std::vector<vec3> → 2D buffer [bbox][4]
+    // Bbox faces are 4-vertex rectangles (verified in primitiveIntersection.cu:390-393)
     if (geometry.bbox_count > 0 && !geometry.bboxes.vertices.empty()) {
         std::vector<std::vector<helios::vec3>> bbox_verts_2d(geometry.bbox_count);
         for (size_t b = 0; b < geometry.bbox_count; b++) {
-            bbox_verts_2d[b].resize(8);
-            for (int v = 0; v < 8; v++) {
-                bbox_verts_2d[b][v] = geometry.bboxes.vertices[b * 8 + v];
+            bbox_verts_2d[b].resize(4);
+            for (int v = 0; v < 4; v++) {
+                bbox_verts_2d[b][v] = geometry.bboxes.vertices[b * 4 + v];
             }
         }
         initializeBuffer2Dfloat3(bbox_vertices_RTbuffer, bbox_verts_2d);

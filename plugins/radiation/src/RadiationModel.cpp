@@ -6727,7 +6727,6 @@ void RadiationModel::buildGeometryData() {
     geometry_data.disk_count = disk_idx;
     geometry_data.tile_count = tile_idx;
     geometry_data.voxel_count = voxel_idx;
-    geometry_data.bbox_count = bbox_idx;
 
     // Build patch_UUID mapping: patch_UUID[patch_idx] = UUID
     // This must be done AFTER the loop so we can index by patch_idx
@@ -6746,6 +6745,117 @@ void RadiationModel::buildGeometryData() {
         }
     }
 
+    // ========== Periodic Boundary Bboxes ==========
+    // Create bbox geometry for periodic boundary conditions
+    // Each bbox face is a rectangular boundary at domain edge
+
+    // Get domain bounding box
+    vec2 xbounds, ybounds, zbounds;
+    context->getDomainBoundingBox(xbounds, ybounds, zbounds);
+
+    // Validate camera positions if periodic boundaries enabled
+    if (periodic_flag.x == 1 || periodic_flag.y == 1) {
+        if (!cameras.empty()) {
+            for (auto &camera : cameras) {
+                vec3 camerapos = camera.second.position;
+                if (camerapos.x < xbounds.x || camerapos.x > xbounds.y ||
+                    camerapos.y < ybounds.x || camerapos.y > ybounds.y) {
+                    std::cout << "WARNING (RadiationModel::buildGeometryData): camera position is outside of the domain bounding box. Disabling periodic boundary conditions." << std::endl;
+                    periodic_flag.x = 0;
+                    periodic_flag.y = 0;
+                    break;
+                }
+                // Extend z-bounds to include camera
+                if (camerapos.z < zbounds.x) {
+                    zbounds.x = camerapos.z;
+                }
+                if (camerapos.z > zbounds.y) {
+                    zbounds.y = camerapos.z;
+                }
+            }
+        }
+    }
+
+    // Expand bounds slightly to ensure bbox faces are outside geometry
+    xbounds.x -= 1e-5;
+    xbounds.y += 1e-5;
+    ybounds.x -= 1e-5;
+    ybounds.y += 1e-5;
+    zbounds.x -= 1e-5;
+    zbounds.y += 1e-5;
+
+    // Bbox UUIDs follow the old OptiX convention: Nprimitives + i
+    // This matches the original implementation for compatibility with shader code
+    uint bbox_UUID_base = Nprimitives;
+
+    // Create bbox faces based on periodic flags
+    if (periodic_flag.x == 1) {
+        // -x facing boundary (4 vertices: counter-clockwise from bottom-left)
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.x, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.y, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.y, zbounds.y));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.x, zbounds.y));
+        geometry_data.bboxes.UUIDs.push_back(bbox_UUID_base + bbox_idx);
+        bbox_idx++;
+
+        // +x facing boundary
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.x, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.y, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.y, zbounds.y));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.x, zbounds.y));
+        geometry_data.bboxes.UUIDs.push_back(bbox_UUID_base + bbox_idx);
+        bbox_idx++;
+    }
+
+    if (periodic_flag.y == 1) {
+        // -y facing boundary
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.x, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.x, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.x, zbounds.y));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.x, zbounds.y));
+        geometry_data.bboxes.UUIDs.push_back(bbox_UUID_base + bbox_idx);
+        bbox_idx++;
+
+        // +y facing boundary
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.y, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.y, zbounds.x));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.y, ybounds.y, zbounds.y));
+        geometry_data.bboxes.vertices.push_back(vec3(xbounds.x, ybounds.y, zbounds.y));
+        geometry_data.bboxes.UUIDs.push_back(bbox_UUID_base + bbox_idx);
+        bbox_idx++;
+    }
+
+    // Update bbox count
+    geometry_data.bbox_count = bbox_idx;
+
+    // Add bbox primitive data so hit/intersection shaders can access them
+    // Bbox positions are after real primitives: primitive_count + bbox_idx
+    if (bbox_idx > 0) {
+        geometry_data.primitive_types.resize(geometry_data.primitive_count + bbox_idx, UINT_MAX);
+        geometry_data.twosided_flags.resize(geometry_data.primitive_count + bbox_idx, 0);
+        geometry_data.solid_fractions.resize(geometry_data.primitive_count + bbox_idx, 1.0f);
+        geometry_data.object_IDs.resize(geometry_data.primitive_count + bbox_idx, UINT_MAX);
+        geometry_data.object_subdivisions.resize(geometry_data.primitive_count + bbox_idx, make_int2(1, 1));
+        geometry_data.transform_matrices.resize((geometry_data.primitive_count + bbox_idx) * 16, 0.0f);
+        geometry_data.primitive_IDs.resize(geometry_data.primitive_count + bbox_idx, UINT_MAX);
+
+        for (size_t i = 0; i < bbox_idx; i++) {
+            size_t bbox_pos = geometry_data.primitive_count + i;
+            geometry_data.primitive_types[bbox_pos] = 5; // type=5 for bbox
+            geometry_data.twosided_flags[bbox_pos] = 1; // bboxes are two-sided
+            geometry_data.solid_fractions[bbox_pos] = 1.0f; // bboxes are fully solid
+            geometry_data.object_IDs[bbox_pos] = UINT_MAX; // no parent object
+            geometry_data.object_subdivisions[bbox_pos] = make_int2(1, 1); // no subdivisions
+            geometry_data.primitive_IDs[bbox_pos] = bbox_UUID_base + i; // bbox UUID
+
+            // Set identity transform matrix for bbox
+            geometry_data.transform_matrices[bbox_pos * 16 + 0] = 1.0f;  // m00
+            geometry_data.transform_matrices[bbox_pos * 16 + 5] = 1.0f;  // m11
+            geometry_data.transform_matrices[bbox_pos * 16 + 10] = 1.0f; // m22
+            geometry_data.transform_matrices[bbox_pos * 16 + 15] = 1.0f; // m33
+        }
+    }
+
     // Periodic boundary condition
     geometry_data.periodic_flag = periodic_flag;
 
@@ -6753,15 +6863,35 @@ void RadiationModel::buildGeometryData() {
     buildTextureData();
 
     // Build primitive_positions lookup table for GPU UUID→position conversion
-    // Size by max UUID to create sparse lookup table
+    // Size by max UUID to create sparse lookup table (include bbox UUIDs)
     // Clear first to remove stale mappings from deleted primitives
     geometry_data.primitive_positions.clear();
-    if (!primitive_UUIDs_ordered.empty()) {
-        uint max_UUID = *std::max_element(primitive_UUIDs_ordered.begin(), primitive_UUIDs_ordered.end());
+    if (!geometry_data.primitive_UUIDs.empty()) {
+        uint max_UUID = *std::max_element(geometry_data.primitive_UUIDs.begin(), geometry_data.primitive_UUIDs.end());
+        // Expand to include bbox UUIDs if present (bboxes use Nprimitives + i as UUID)
+        if (geometry_data.bbox_count > 0) {
+            uint bbox_UUID_base = geometry_data.primitive_count;  // Nprimitives
+            uint max_bbox_UUID = bbox_UUID_base + geometry_data.bbox_count - 1;
+            if (max_bbox_UUID > max_UUID) {
+                max_UUID = max_bbox_UUID;  // Update max to include bbox UUIDs
+            }
+        }
         geometry_data.primitive_positions.resize(max_UUID + 1, UINT_MAX);  // UINT_MAX = invalid/unused
+
+        // Map real primitive UUIDs
         for (size_t i = 0; i < geometry_data.primitive_count; i++) {
             uint UUID = geometry_data.primitive_UUIDs[i];
             geometry_data.primitive_positions[UUID] = i;  // Map UUID → array position
+        }
+
+        // Map bbox UUIDs to their positions (after real primitives)
+        // Bbox UUIDs use old OptiX convention: Nprimitives + i
+        if (geometry_data.bbox_count > 0) {
+            uint bbox_UUID_base = geometry_data.primitive_count;  // Nprimitives
+            for (size_t i = 0; i < geometry_data.bbox_count; i++) {
+                uint bbox_UUID = bbox_UUID_base + i;
+                geometry_data.primitive_positions[bbox_UUID] = geometry_data.primitive_count + i;
+            }
         }
     }
 }
@@ -6963,6 +7093,38 @@ void RadiationModel::buildMaterialData() {
     // Create indexer for material properties: [source][primitive][band]
     MaterialPropertyIndexer mat_indexer(Nsources, Nprims, Nbands);
 
+    // Cache unique spectral data to avoid redundant loads
+    std::map<std::string, std::vector<helios::vec2>> unique_rho_spectra;
+    std::map<std::string, std::vector<helios::vec2>> unique_tau_spectra;
+
+    for (size_t p = 0; p < Nprims; p++) {
+        uint UUID = geometry_data.primitive_UUIDs[p];
+
+        // Cache reflectivity spectra
+        if (context->doesPrimitiveDataExist(UUID, "reflectivity_spectrum")) {
+            std::string spectrum_label;
+            context->getPrimitiveData(UUID, "reflectivity_spectrum", spectrum_label);
+            if (unique_rho_spectra.find(spectrum_label) == unique_rho_spectra.end()) {
+                // Only load if spectrum exists in global data
+                if (context->doesGlobalDataExist(spectrum_label.c_str())) {
+                    unique_rho_spectra[spectrum_label] = loadSpectralData(spectrum_label);
+                }
+            }
+        }
+
+        // Cache transmissivity spectra
+        if (context->doesPrimitiveDataExist(UUID, "transmissivity_spectrum")) {
+            std::string spectrum_label;
+            context->getPrimitiveData(UUID, "transmissivity_spectrum", spectrum_label);
+            if (unique_tau_spectra.find(spectrum_label) == unique_tau_spectra.end()) {
+                // Only load if spectrum exists in global data
+                if (context->doesGlobalDataExist(spectrum_label.c_str())) {
+                    unique_tau_spectra[spectrum_label] = loadSpectralData(spectrum_label);
+                }
+            }
+        }
+    }
+
     // Extract material properties from Context primitives
     size_t b_idx = 0;
     for (const auto& band_pair : radiation_bands) {
@@ -6976,18 +7138,78 @@ void RadiationModel::buildMaterialData() {
                 // Note: p is already the array position, so we use p directly (not UUID)
                 size_t idx = mat_indexer(s, p, b_idx);
 
-                // Get reflectivity
+                // Get reflectivity - try spectrum first, then per-band label
                 float rho = rho_default;
-                std::string rho_label = "reflectivity_" + band_label;
-                if (context->doesPrimitiveDataExist(UUID, rho_label.c_str())) {
-                    context->getPrimitiveData(UUID, rho_label.c_str(), rho);
+
+                if (context->doesPrimitiveDataExist(UUID, "reflectivity_spectrum")) {
+                    // Spectrum-based reflectivity
+                    std::string spectrum_label;
+                    context->getPrimitiveData(UUID, "reflectivity_spectrum", spectrum_label);
+
+                    // Get spectrum from cache
+                    if (unique_rho_spectra.find(spectrum_label) != unique_rho_spectra.end()) {
+                        const std::vector<helios::vec2>& spectrum = unique_rho_spectra.at(spectrum_label);
+
+                        // Get band wavelength bounds
+                        helios::vec2 wavebounds = band_pair.second.wavebandBounds;
+                        if (wavebounds.x == 0 && wavebounds.y == 0) {
+                            helios_runtime_error("ERROR (RadiationModel::buildMaterialData): Band '" + band_label +
+                                               "' has no wavelength bounds - required for spectral integration");
+                        }
+
+                        // Integrate spectrum over band wavelength range
+                        if (!radiation_sources[s].source_spectrum.empty()) {
+                            // Weight by source spectrum
+                            rho = integrateSpectrum(s, spectrum, wavebounds.x, wavebounds.y);
+                        } else {
+                            // Uniform integration (divide by wavelength range to normalize)
+                            rho = integrateSpectrum(spectrum, wavebounds.x, wavebounds.y) / (wavebounds.y - wavebounds.x);
+                        }
+                    }
+                }
+                else {
+                    // Per-band reflectivity (backward compatibility)
+                    std::string rho_label = "reflectivity_" + band_label;
+                    if (context->doesPrimitiveDataExist(UUID, rho_label.c_str())) {
+                        context->getPrimitiveData(UUID, rho_label.c_str(), rho);
+                    }
                 }
 
-                // Get transmissivity
+                // Get transmissivity - try spectrum first, then per-band label
                 float tau = tau_default;
-                std::string tau_label = "transmissivity_" + band_label;
-                if (context->doesPrimitiveDataExist(UUID, tau_label.c_str())) {
-                    context->getPrimitiveData(UUID, tau_label.c_str(), tau);
+
+                if (context->doesPrimitiveDataExist(UUID, "transmissivity_spectrum")) {
+                    // Spectrum-based transmissivity
+                    std::string spectrum_label;
+                    context->getPrimitiveData(UUID, "transmissivity_spectrum", spectrum_label);
+
+                    // Get spectrum from cache
+                    if (unique_tau_spectra.find(spectrum_label) != unique_tau_spectra.end()) {
+                        const std::vector<helios::vec2>& spectrum = unique_tau_spectra.at(spectrum_label);
+
+                        // Get band wavelength bounds
+                        helios::vec2 wavebounds = band_pair.second.wavebandBounds;
+                        if (wavebounds.x == 0 && wavebounds.y == 0) {
+                            helios_runtime_error("ERROR (RadiationModel::buildMaterialData): Band '" + band_label +
+                                               "' has no wavelength bounds - required for spectral integration");
+                        }
+
+                        // Integrate spectrum over band wavelength range
+                        if (!radiation_sources[s].source_spectrum.empty()) {
+                            // Weight by source spectrum
+                            tau = integrateSpectrum(s, spectrum, wavebounds.x, wavebounds.y);
+                        } else {
+                            // Uniform integration
+                            tau = integrateSpectrum(spectrum, wavebounds.x, wavebounds.y) / (wavebounds.y - wavebounds.x);
+                        }
+                    }
+                }
+                else {
+                    // Per-band transmissivity (backward compatibility)
+                    std::string tau_label = "transmissivity_" + band_label;
+                    if (context->doesPrimitiveDataExist(UUID, tau_label.c_str())) {
+                        context->getPrimitiveData(UUID, tau_label.c_str(), tau);
+                    }
                 }
 
                 // Get emissivity for validation
