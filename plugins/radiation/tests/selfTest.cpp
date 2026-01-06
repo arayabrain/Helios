@@ -273,11 +273,6 @@ DOCTEST_TEST_CASE("RadiationModel Black Parallel Rectangles") {
     float shortwave_error_0 = fabsf(shortwave_model_0 - shortwave_exact_0) / fabsf(shortwave_exact_0);
     float shortwave_error_1 = fabsf(shortwave_model_1 - shortwave_exact_1) / fabsf(shortwave_exact_1);
 
-    std::cerr << "Black Rect DEBUG: expected=" << shortwave_exact_0
-              << " actual0=" << shortwave_model_0
-              << " actual1=" << shortwave_model_1
-              << " F12=" << F12 << std::endl;
-
     DOCTEST_CHECK(shortwave_error_0 <= error_threshold);
     DOCTEST_CHECK(shortwave_error_1 <= error_threshold);
 }
@@ -5545,11 +5540,6 @@ DOCTEST_TEST_CASE("RadiationModel Automatic Spectrum Update Detection") {
     // Note: Diffuse contribution may be small in this simple test geometry
     // The important test is that direct spectrum update worked (verified above)
     DOCTEST_CHECK(flux_v3 >= flux_v2 * 0.99f); // Allow for small numerical differences
-
-    std::cout << "Automatic spectrum update detection test passed!" << std::endl;
-    std::cout << "  Initial flux: " << flux_v1 << std::endl;
-    std::cout << "  After direct update (2x): " << flux_v2 << " (expected ~" << flux_v1 * 2.0f << ")" << std::endl;
-    std::cout << "  After diffuse update (3x): " << flux_v3 << " (diffuse contribution may be small in simple geometry)" << std::endl;
 }
 
 DOCTEST_TEST_CASE("RadiationModel Multiple Sources Same Spectrum Update") {
@@ -5592,7 +5582,6 @@ DOCTEST_TEST_CASE("RadiationModel Multiple Sources Same Spectrum Update") {
     // All 3 sources doubled, so total flux should roughly double
     DOCTEST_CHECK(flux_v2 > flux_v1 * 1.8f);
 
-    std::cout << "Multiple sources shared spectrum update test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("RadiationModel No Update When Spectrum Unchanged") {
@@ -5621,8 +5610,6 @@ DOCTEST_TEST_CASE("RadiationModel No Update When Spectrum Unchanged") {
     float flux;
     context.getPrimitiveData(ground, "radiation_flux_test", flux);
     DOCTEST_CHECK(flux > 0.0f);
-
-    std::cout << "No unnecessary update test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("RadiationModel - CameraProperties default camera_zoom") {
@@ -5729,8 +5716,6 @@ DOCTEST_TEST_CASE("Lens Flare - Enable/Disable API") {
     DOCTEST_CHECK_THROWS(radiation.enableCameraLensFlare("nonexistent_camera"));
     DOCTEST_CHECK_THROWS(radiation.disableCameraLensFlare("nonexistent_camera"));
     DOCTEST_CHECK_THROWS((void) radiation.isCameraLensFlareEnabled("nonexistent_camera"));
-
-    std::cout << "Lens flare enable/disable API test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("Lens Flare - Properties API") {
@@ -5803,8 +5788,6 @@ DOCTEST_TEST_CASE("Lens Flare - Properties API") {
     invalid_props = default_props;
     invalid_props.ghost_count = 0;
     DOCTEST_CHECK_THROWS(radiation.setCameraLensFlareProperties("test_camera", invalid_props));
-
-    std::cout << "Lens flare properties API test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("Lens Flare - Application to Camera Image") {
@@ -5875,7 +5858,6 @@ DOCTEST_TEST_CASE("Lens Flare - Application to Camera Image") {
     auto all_labels = radiation.getAllCameraLabels();
     DOCTEST_CHECK(std::find(all_labels.begin(), all_labels.end(), "test_camera") != all_labels.end());
 
-    std::cout << "Lens flare application test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("Lens Flare - Disabled Does Nothing") {
@@ -5924,7 +5906,6 @@ DOCTEST_TEST_CASE("Lens Flare - Disabled Does Nothing") {
     DOCTEST_CHECK(!radiation.isCameraLensFlareEnabled("test_camera"));
     DOCTEST_CHECK_NOTHROW(radiation.applyCameraImageCorrections("test_camera", "red", "green", "blue"));
 
-    std::cout << "Lens flare disabled test passed!" << std::endl;
 }
 
 DOCTEST_TEST_CASE("RadiationModel - Camera Sphere Source Rendering") {
@@ -6307,15 +6288,13 @@ DOCTEST_TEST_CASE("Phase1.E Step6b: Backend Diffuse With Partial Occlusion") {
     float patch0_radiation = results.radiation_in[0];
     float patch1_radiation = results.radiation_in[1];
 
-    std::cout << "DEBUG Occlusion: patch0=" << patch0_radiation << " W, patch1=" << patch1_radiation << " W" << std::endl;
-
     // If hits work: patch0 should get LESS than 100 (blocked by patch1)
     // If hits don't work: patch0 gets 100 (all rays miss, no blocking detected)
     DOCTEST_CHECK_MESSAGE(patch0_radiation < 90.0f,
         "Patch0 should be partially blocked by patch1, got " << patch0_radiation << " W (expected <90)");
 }
 
-DOCTEST_TEST_CASE("Phase1.E Step6c: Multi-Patch Direct Radiation Occlusion Test") {
+DOCTEST_TEST_CASE("RadiationModel Multi-Patch Direct Radiation Occlusion Test") {
     // Test if DIRECT rays show proper occlusion with multiple patches
     // This will tell us if the issue is geometry-wide or diffuse-specific
 
@@ -6356,7 +6335,7 @@ DOCTEST_TEST_CASE("Phase1.E Step6c: Multi-Patch Direct Radiation Occlusion Test"
     helios::RayTracingLaunchParams params;
     params.launch_offset = 0;
     params.launch_count = 2;
-    params.rays_per_primitive = 4;  // DEBUG: Small ray count
+    params.rays_per_primitive = 4;
     params.random_seed = 12345;
     params.num_bands_global = 1;
     params.num_bands_launch = 1;
@@ -6373,8 +6352,6 @@ DOCTEST_TEST_CASE("Phase1.E Step6c: Multi-Patch Direct Radiation Occlusion Test"
 
     float patch0_radiation = results.radiation_in[0];
     float patch1_radiation = results.radiation_in[1];
-
-    std::cout << "DEBUG Direct Occlusion: patch0=" << patch0_radiation << " W, patch1=" << patch1_radiation << " W" << std::endl;
 
     // If blocking works: patch0 should get ~0 (blocked by patch1)
     // patch1 should get ~100 (faces source)

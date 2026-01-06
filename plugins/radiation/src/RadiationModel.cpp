@@ -65,9 +65,7 @@ RadiationModel::RadiationModel(helios::Context *context_a) {
 
     initializeOptiX();
 
-    // Phase 1: Initialize backend abstraction layer
-    // Note: Creates second OptiX context temporarily during transition
-    // Will replace OptiX_Context once integration is complete
+    // Initialize backend abstraction layer
     backend = helios::RayTracingBackend::create("optix6");
     backend->initialize();
 }
@@ -1876,8 +1874,7 @@ void RadiationModel::updateGeometry(const std::vector<uint> &UUIDs) {
         std::cout << "Updating geometry in radiation transport model..." << std::flush;
     }
 
-    // Phase 1: Upload geometry through backend abstraction layer
-    // Replaces old direct OptiX buffer population (502 lines removed)
+    // Upload geometry through backend abstraction layer
     buildGeometryData();
     buildUUIDMapping();  // Build UUID↔position mapping for efficient indexing
 
@@ -3674,10 +3671,10 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             std::cout << "..." << std::flush;
         }
 
-        // Phase 1: Launch direct rays through backend
+        // Launch direct rays through backend
         helios::RayTracingLaunchParams params;
         params.launch_offset = 0;
-        params.launch_count = Nprimitives;  // Launch all primitives at once (simplified)
+        params.launch_count = Nprimitives;  // Launch all primitives at once
         params.rays_per_primitive = directRayCount;
         params.random_seed = std::chrono::system_clock::now().time_since_epoch().count();
         params.num_bands_global = Nbands_global;
@@ -6385,8 +6382,6 @@ void RadiationModel::queryBackendGPUMemory() const {
     }
 }
 
-// ========== End Phase 1 Methods ==========
-
 void sutilHandleError(RTcontext context, RTresult code, const char *file, int line) {
     const char *message;
     char s[2048];
@@ -6612,7 +6607,7 @@ void RadiationModel::buildGeometryData() {
 
     size_t Nobjects = primitiveID_indices.size();
 
-    // Phase 1: Populate primitiveID for runBand() compatibility
+    // Populate primitiveID for runBand() compatibility
     primitiveID = primitiveID_indices;
 
     // For backend: primitiveID[position] must return the UUID for that primitive

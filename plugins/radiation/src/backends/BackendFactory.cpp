@@ -16,7 +16,7 @@
 #include "RayTracingBackend.h"
 #include "OptiX6Backend.h"
 
-// Future backend implementations (Phase 2, Phase 3)
+// Future backend implementations
 // #include "OptiX7Backend.h"
 // #include "VulkanBackend.h"
 
@@ -29,14 +29,14 @@ std::unique_ptr<RayTracingBackend> RayTracingBackend::create(const std::string& 
         return std::make_unique<OptiX6Backend>();
     }
 
-    // Future backends will be added in Phase 2 and Phase 3:
+    // Future backends:
 
-    // OptiX 7.7 backend (Phase 2)
+    // OptiX 7.7 backend
     // else if (backend_type == "optix7" || backend_type == "OptiX7") {
     //     return std::make_unique<OptiX7Backend>();
     // }
 
-    // Vulkan ray-tracing backend (Phase 3)
+    // Vulkan ray-tracing backend
     // else if (backend_type == "vulkan" || backend_type == "Vulkan") {
     //     return std::make_unique<VulkanBackend>();
     // }
