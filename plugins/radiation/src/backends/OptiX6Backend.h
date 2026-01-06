@@ -167,6 +167,8 @@ private:
     RTprogram tile_bounds;
     RTprogram voxel_intersect;
     RTprogram voxel_bounds;
+    RTprogram bbox_intersect;
+    RTprogram bbox_bounds;
 
     // Hit programs
     RTprogram closest_hit_direct;

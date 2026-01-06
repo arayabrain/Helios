@@ -14,6 +14,7 @@ add_library(radiation STATIC
     "src/RadiationCamera.cpp"
     "src/CameraCalibration.cpp"
     "src/LensFlare.cpp"
+    "src/RayTracingTypes.cpp"
     "src/backends/OptiX6Backend.cpp"
     "src/backends/BackendFactory.cpp"
     "tests/selfTest.cpp"
