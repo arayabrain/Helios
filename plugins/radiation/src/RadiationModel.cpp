@@ -1885,9 +1885,6 @@ void RadiationModel::updateGeometry(const std::vector<uint> &UUIDs) {
     backend->updateGeometry(geometry_data);
     backend->buildAccelerationStructure();
 
-    // Upload primitive_positions to old context (needed by direct/diffuse ray hit programs)
-    initializeBuffer1Dui(primitive_positions_RTbuffer, geometry_data.primitive_positions);
-
     radiativepropertiesneedupdate = true;
     isgeometryinitialized = true;
 
@@ -2694,13 +2691,7 @@ void RadiationModel::updateRadiativeProperties() {
     std::vector<float> rho_cam_flat = flatten(rho_cam);
     std::vector<float> tau_cam_flat = flatten(tau_cam);
 
-    // Upload to OLD OptiX buffers (legacy compatibility - these buffers might not be used)
-    initializeBuffer1Df(rho_RTbuffer, rho_flat);
-    initializeBuffer1Df(tau_RTbuffer, tau_flat);
-    initializeBuffer1Df(rho_cam_RTbuffer, rho_cam_flat);
-    initializeBuffer1Df(tau_cam_RTbuffer, tau_cam_flat);
-
-    // CRITICAL: Also upload to BACKEND buffers (this is what CUDA actually reads!)
+    // Upload material properties to backend
     material_data.num_primitives = Nprimitives;
     material_data.num_bands = radiation_bands.size();
     material_data.num_sources = radiation_sources.size();
@@ -2710,45 +2701,23 @@ void RadiationModel::updateRadiativeProperties() {
     material_data.reflectivity_cam = rho_cam_flat;
     material_data.transmissivity_cam = tau_cam_flat;
 
-    backend->updateMaterials(material_data);
+    // Specular reflection properties
+    material_data.specular_exponent.resize(Nprimitives, -1.f);
+    material_data.specular_scale.resize(Nprimitives, 0.f);
 
-    // Specular reflection exponent
-    std::vector<float> specular_exponent;
-    specular_exponent.resize(Nprimitives, 0.f);
-    std::vector<float> specular_scale;
-    specular_scale.resize(Nprimitives, 0.f);
-    bool specular_exponent_specified = false;
-    bool specular_scale_specified = false;
     for (size_t u = 0; u < Nprimitives; u++) {
-
         uint UUID = context_UUIDs.at(u);
 
         if (context->doesPrimitiveDataExist(UUID, "specular_exponent") && context->getPrimitiveDataType("specular_exponent") == HELIOS_TYPE_FLOAT) {
-            context->getPrimitiveData(UUID, "specular_exponent", specular_exponent.at(u));
-            specular_exponent_specified = true;
-        } else {
-            specular_exponent.at(u) = -1.f;
+            context->getPrimitiveData(UUID, "specular_exponent", material_data.specular_exponent.at(u));
         }
 
         if (context->doesPrimitiveDataExist(UUID, "specular_scale") && context->getPrimitiveDataType("specular_scale") == HELIOS_TYPE_FLOAT) {
-            context->getPrimitiveData(UUID, "specular_scale", specular_scale.at(u));
-            specular_scale_specified = true;
-        } else {
-            specular_scale.at(u) = 0.f;
+            context->getPrimitiveData(UUID, "specular_scale", material_data.specular_scale.at(u));
         }
     }
 
-    uint specular_enabled = 0;
-    if (specular_exponent_specified) {
-        initializeBuffer1Df(specular_exponent_RTbuffer, specular_exponent);
-        if (specular_scale_specified) {
-            initializeBuffer1Df(specular_scale_RTbuffer, specular_scale);
-            specular_enabled = 2;
-        } else {
-            specular_enabled = 1;
-        }
-    }
-    RT_CHECK_ERROR(rtVariableSet1ui(specular_reflection_enabled_RTvariable, specular_enabled));
+    backend->updateMaterials(material_data);
 
     radiativepropertiesneedupdate = false;
 
@@ -3385,15 +3354,11 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     buildSourceData();
     backend->updateSources(source_data);
 
-    // Number of radiation bands in this launch
+    // Prepare launch parameters (these will be passed to backend via RayTracingLaunchParams)
     size_t Nbands_launch = band_labels.size();
-    RT_CHECK_ERROR(rtVariableSet1ui(Nbands_launch_RTvariable, Nbands_launch));
-
-    // Number of total bands in the radiation model
     size_t Nbands_global = radiation_bands.size();
-    RT_CHECK_ERROR(rtVariableSet1ui(Nbands_global_RTvariable, Nbands_global));
 
-    // Run all bands by default
+    // Build band launch flags
     std::vector<char> band_launch_flag(Nbands_global);
     uint bb = 0;
     for (auto &band: radiation_bands) {
@@ -3402,26 +3367,12 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
         }
         bb++;
     }
-    initializeBuffer1Dchar(band_launch_flag_RTbuffer, band_launch_flag);
 
-    // Set the number of Context primitives
+    // Get dimensions
     size_t Nobjects = primitiveID.size();
     size_t Nprimitives = context_UUIDs.size();
-    RT_CHECK_ERROR(rtVariableSet1ui(Nprimitives_RTvariable, Nprimitives));
-
-    // Set the random number seed
-    RT_CHECK_ERROR(rtVariableSet1ui(random_seed_RTvariable, std::chrono::system_clock::now().time_since_epoch().count()));
-
-    // Number of external radiation sources
     uint Nsources = radiation_sources.size();
-    RT_CHECK_ERROR(rtVariableSet1ui(Nsources_RTvariable, Nsources));
-
-    // Set periodic boundary condition (if applicable)
-    RT_CHECK_ERROR(rtVariableSet2f(periodic_flag_RTvariable, periodic_flag.x, periodic_flag.y));
-
-    // Number of radiation cameras
     uint Ncameras = cameras.size();
-    RT_CHECK_ERROR(rtVariableSet1ui(Ncameras_RTvariable, Ncameras));
 
     // Note: Atmospheric sky radiance model is updated per-camera (see camera trace loop below)
     // This allows us to use camera-specific spectral responses for each band
@@ -3435,7 +3386,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             scatteringenabled = true;
         }
     }
-    initializeBuffer1Dui(max_scatters_RTbuffer, scattering_depth);
 
     // Issue warning if rho>0, tau>0, or eps<1
     for (int b = 0; b < Nbands_launch; b++) {
@@ -3537,19 +3487,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
         }
     }
 
-    // Zero buffers (both old OptiX buffers and new backend buffers for now during migration)
-    zeroBuffer1D(radiation_in_RTbuffer, Nbands_launch * Nprimitives);
-    zeroBuffer1D(scatter_buff_top_RTbuffer, Nbands_launch * Nprimitives);
-    zeroBuffer1D(scatter_buff_bottom_RTbuffer, Nbands_launch * Nprimitives);
-    zeroBuffer1D(Rsky_RTbuffer, Nbands_launch * Nprimitives);
-
-    if (Ncameras > 0) {
-        zeroBuffer1D(scatter_buff_top_cam_RTbuffer, Nbands_launch * Nprimitives);
-        zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, Nbands_launch * Nprimitives);
-        zeroBuffer1D(radiation_specular_RTbuffer, Nsources * Ncameras * Nprimitives * Nbands_launch);
-    }
-
-    // CRITICAL: Also zero backend buffers (backend has separate RTbuffer handles)
+    // Zero radiation buffers via backend
     backend->zeroRadiationBuffers();
 
     std::vector<float> TBS_top, TBS_bottom;
@@ -4048,12 +3986,11 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             copyBuffer1D(scatter_buff_top_cam_RTbuffer, radiation_out_top_RTbuffer);
             copyBuffer1D(scatter_buff_bottom_cam_RTbuffer, radiation_out_bottom_RTbuffer);
 
-            // re-set diffuse radiation fluxes
+            // re-set diffuse radiation fluxes (will be passed via launch params)
             if (diffuseenabled) {
                 for (auto b = 0; b < Nbands_launch; b++) {
                     diffuse_flux.at(b) = getDiffuseFlux(band_labels.at(b));
                 }
-                initializeBuffer1Df(diffuse_flux_RTbuffer, diffuse_flux);
             }
 
             size_t n = ceil(sqrt(double(diffuseRayCount)));
