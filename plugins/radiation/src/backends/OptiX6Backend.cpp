@@ -830,7 +830,7 @@ void OptiX6Backend::queryGPUMemory() const {
     RTsize memory_used;
     RT_CHECK_ERROR(rtContextGetAttribute(OptiX_Context, RT_CONTEXT_ATTRIBUTE_AVAILABLE_DEVICE_MEMORY, sizeof(RTsize), &memory_used));
 
-    std::cout << "GPU Memory Available: " << memory_used / (1024.0 * 1024.0) << " MB" << std::endl;
+    // Memory info available via backend->queryGPUMemory() - removed automatic output for cleaner tests
 }
 
 std::string OptiX6Backend::getBackendName() const {

@@ -239,8 +239,6 @@ DOCTEST_TEST_CASE("RadiationModel Black Parallel Rectangles") {
     uint patch0 = context_2.addPatch(make_vec3(0, 0, 0), make_vec2(a, b));
     uint patch1 = context_2.addPatch(make_vec3(0, 0, c), make_vec2(a, b), make_SphericalCoord(M_PI, 0.f));
 
-    std::cerr << "TEST SETUP: patch0 UUID=" << patch0 << " (z=0, up) patch1 UUID=" << patch1 << " (z=0.5, down)" << std::endl;
-
     uint flag = 0;
     context_2.setPrimitiveData(patch0, "twosided_flag", flag);
     context_2.setPrimitiveData(patch1, "twosided_flag", flag);
@@ -6034,7 +6032,7 @@ DOCTEST_TEST_CASE("Phase1.E Step2: Backend GPU Memory Query Integration") {
 }
 
 
-DOCTEST_TEST_CASE("Phase1.E Step3: buildGeometryData() Extraction") {
+DOCTEST_TEST_CASE("RadiationModel buildGeometryData() Extraction") {
     // Test that buildGeometryData() correctly extracts geometry from Context
 
     helios::Context context;

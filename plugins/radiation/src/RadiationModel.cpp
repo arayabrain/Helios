@@ -3425,11 +3425,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
         }
 
         if (scatteringenabled && (emissionenabled || diffuseenabled || rundirect)) {
-            // Upload camera scatter to backend for scattering iterations
-            if (Ncameras > 0) {
-                backend->uploadRadiationOut(scatter_top_cam, scatter_bottom_cam);
-            }
-
             // re-set diffuse radiation fluxes (will be passed via launch params)
             if (diffuseenabled) {
                 for (auto b = 0; b < Nbands_launch; b++) {
