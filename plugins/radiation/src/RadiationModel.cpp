@@ -15,6 +15,7 @@
 
 #include "RadiationModel.h"
 #include "BufferIndexing.h"
+#include <climits>
 #include <cmath>
 #include <ctime>
 #include <fstream>
@@ -2239,7 +2240,7 @@ std::vector<float> RadiationModel::updateAtmosphericSkyModel(const std::vector<s
     }
 
     // Compute per-band sky radiance parameters
-    std::vector<optix::float4> sky_params(Nbands_launch);
+    std::vector<helios::vec4> sky_params(Nbands_launch);
 
     // Check if Prague data is available
     bool use_prague_fallback = (prague_valid != 1);
@@ -2397,7 +2398,7 @@ std::vector<float> RadiationModel::updateAtmosphericSkyModel(const std::vector<s
         float base_radiance_for_gpu = integrated_L_zenith / std::max(integrated_norm, 0.1f);
 
         sky_base_radiances[b] = base_radiance_for_gpu;
-        sky_params[b] = optix::make_float4(integrated_circ_str, integrated_circ_width, integrated_horiz_bright, integrated_norm);
+        sky_params[b] = helios::make_vec4(integrated_circ_str, integrated_circ_width, integrated_horiz_bright, integrated_norm);
     }
 
     // Sky parameters will be uploaded to backend via updateSkyModel()
@@ -2887,22 +2888,22 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     // NOTE: diffuse_dist_norm now passed to backend via launch params, not uploaded here
 
     // Set diffuse distribution peak direction for each band
-    std::vector<optix::float3> diffuse_peak_dir(Nbands_launch);
+    std::vector<helios::vec3> diffuse_peak_dir(Nbands_launch);
     if (diffuseenabled) {
         for (auto b = 0; b < Nbands_launch; b++) {
             helios::vec3 peak_dir = radiation_bands.at(band_labels.at(b)).diffusePeakDir;
-            diffuse_peak_dir.at(b) = optix::make_float3(peak_dir.x, peak_dir.y, peak_dir.z);
+            diffuse_peak_dir.at(b) = helios::make_vec3(peak_dir.x, peak_dir.y, peak_dir.z);
         }
     }
     // NOTE: diffuse_peak_dir now passed to backend via launch params, not uploaded here
 
     // Upload Prague parameters for general diffuse (reuses camera buffer)
     // This allows general diffuse to use Prague sky model if available
-    std::vector<optix::float4> prague_params(Nbands_launch);
+    std::vector<helios::vec4> prague_params(Nbands_launch);
     if (diffuseenabled) {
         for (auto b = 0; b < Nbands_launch; b++) {
             const auto &params = radiation_bands.at(band_labels.at(b)).diffusePragueParams;
-            prague_params.at(b) = optix::make_float4(params.x, params.y, params.z, params.w);
+            prague_params.at(b) = helios::make_vec4(params.x, params.y, params.z, params.w);
         }
         // Prague params will be uploaded to backend via updateSkyModel() during scattering
     }
@@ -2952,7 +2953,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
     // ***** DIRECT LAUNCH FROM ALL RADIATION SOURCES ***** //
 
-    optix::int3 launch_dim_dir;
+    helios::int3 launch_dim_dir;
 
     bool rundirect = false;
     for (uint s = 0; s < Nsources; s++) {
@@ -2970,9 +2971,9 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
         std::vector<std::vector<float>> fluxes; // first index is the source, second index is the band (only those passed to runBand() function)
         fluxes.resize(Nsources);
-        std::vector<optix::float3> positions(Nsources);
-        std::vector<optix::float2> widths(Nsources);
-        std::vector<optix::float3> rotations(Nsources);
+        std::vector<helios::vec3> positions(Nsources);
+        std::vector<helios::vec2> widths(Nsources);
+        std::vector<helios::vec3> rotations(Nsources);
         std::vector<uint> types(Nsources);
 
         size_t s = 0;
@@ -2984,9 +2985,9 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 fluxes.at(s).at(b) = getSourceFlux(s, band_labels.at(b));
             }
 
-            positions.at(s) = optix::make_float3(source.source_position.x, source.source_position.y, source.source_position.z);
-            widths.at(s) = optix::make_float2(source.source_width.x, source.source_width.y);
-            rotations.at(s) = optix::make_float3(source.source_rotation.x, source.source_rotation.y, source.source_rotation.z);
+            positions.at(s) = helios::make_vec3(source.source_position.x, source.source_position.y, source.source_position.z);
+            widths.at(s) = helios::make_vec2(source.source_width.x, source.source_width.y);
+            rotations.at(s) = helios::make_vec3(source.source_rotation.x, source.source_rotation.y, source.source_rotation.z);
             types.at(s) = source.source_type;
 
             s++;
@@ -3231,7 +3232,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             params.diffuse_flux = diffuse_flux;
             params.diffuse_extinction = diffuse_extinction;
             params.diffuse_dist_norm = diffuse_dist_norm;
-            // Convert optix::float3 to helios::vec3
+            // Convert helios::vec3 to helios::vec3
             std::vector<helios::vec3> peak_dirs(diffuse_peak_dir.size());
             for (size_t i = 0; i < diffuse_peak_dir.size(); i++) {
                 peak_dirs[i] = helios::make_vec3(diffuse_peak_dir[i].x, diffuse_peak_dir[i].y, diffuse_peak_dir[i].z);
@@ -3354,7 +3355,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 params.diffuse_flux = diffuse_flux;
                 params.diffuse_extinction = diffuse_extinction;
                 params.diffuse_dist_norm = diffuse_dist_norm;
-                // Convert optix::float3 to helios::vec3
+                // Convert helios::vec3 to helios::vec3
                 std::vector<helios::vec3> peak_dirs(diffuse_peak_dir.size());
                 for (size_t i = 0; i < diffuse_peak_dir.size(); i++) {
                     peak_dirs[i] = helios::make_vec3(diffuse_peak_dir[i].x, diffuse_peak_dir[i].y, diffuse_peak_dir[i].z);
@@ -3444,16 +3445,9 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 // Get sky radiances for first camera (already computed above)
                 std::vector<float> sky_for_backend = updateAtmosphericSkyModel(band_labels, cameras.begin()->second);
 
-                // Convert Prague params to vec4 format for backend
-                std::vector<helios::vec4> prague_vec4(prague_params.size());
-                for (size_t i = 0; i < prague_params.size(); i++) {
-                    prague_vec4[i] = helios::make_vec4(prague_params[i].x, prague_params[i].y,
-                                                       prague_params[i].z, prague_params[i].w);
-                }
-
                 // Upload to backend
                 backend->updateSkyModel(
-                    prague_vec4,
+                    prague_params,
                     sky_for_backend,
                     sun_dir,
                     solar_radiances,
@@ -4713,25 +4707,6 @@ void RadiationModel::queryBackendGPUMemory() const {
     }
 }
 
-void sutilHandleError(RTcontext context, RTresult code, const char *file, int line) {
-    const char *message;
-    char s[2048];
-    rtContextGetErrorString(context, code, &message);
-    sprintf(s, "%s\n(%s:%d)", message, file, line);
-    sutilReportError(s);
-    exit(1);
-}
-
-void sutilReportError(const char *message) {
-    fprintf(stderr, "OptiX Error: %s\n", message);
-#if defined(_WIN32) && defined(RELEASE_PUBLIC)
-    {
-        char s[2048];
-        sprintf(s, "OptiX Error: %s", message);
-        MessageBox(0, s, "OptiX Error", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
-    }
-#endif
-}
 
 helios::RayTracingLaunchParams RadiationModel::buildCameraLaunchParams(
     const RadiationCamera& camera,
