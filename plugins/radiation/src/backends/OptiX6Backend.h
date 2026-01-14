@@ -106,6 +106,7 @@ public:
     // Buffer utilities
     void zeroRadiationBuffers() override;
     void zeroScatterBuffers() override;
+    void zeroCameraPixelBuffers(const helios::int2& resolution) override;
     void copyScatterToRadiation() override;
     void uploadRadiationOut(const std::vector<float>& radiation_out_top,
                             const std::vector<float>& radiation_out_bottom) override;

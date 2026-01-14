@@ -3547,6 +3547,9 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 pixel_label_camera.antialiasing_samples = 1;
                 std::vector<CameraTile> pixel_tiles = computeCameraTiles(pixel_label_camera, maxRays);
 
+                // Zero camera pixel buffers once before tile loop
+                backend->zeroCameraPixelBuffers(camera.second.resolution);
+
                 // Launch pixel label rays (tiled or full)
                 for (size_t tile_idx = 0; tile_idx < pixel_tiles.size(); tile_idx++) {
                     const auto& tile = pixel_tiles[tile_idx];

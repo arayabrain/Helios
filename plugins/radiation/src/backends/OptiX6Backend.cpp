@@ -675,22 +675,24 @@ void OptiX6Backend::launchPixelLabelRays(const RayTracingLaunchParams& params) {
         helios_runtime_error("ERROR (OptiX6Backend::launchPixelLabelRays): Backend not initialized.");
     }
 
-    // Set launch parameters (camera parameters should already be set)
+    // Set launch parameters
     launchParamsToVariables(params);
 
-    // Set the 3 camera parameters (needed for pixel coordinate calculations)
+    // Set only essential parameters for pixel coordinate calculations
+    // Camera orientation (position/direction) is inherited from camera rendering
+    // (This matches master's behavior where pixel labeling reuses camera settings)
     RT_CHECK_ERROR(rtVariableSet1f(camera_viewplane_length_RTvariable, params.camera_viewplane_length));
     RT_CHECK_ERROR(rtVariableSet1f(camera_pixel_solid_angle_RTvariable, params.camera_pixel_solid_angle));
     RT_CHECK_ERROR(rtVariableSet2i(camera_resolution_full_RTvariable,
                                   params.camera_resolution_full.x,
                                   params.camera_resolution_full.y));
 
-    // Resize pixel label and depth buffers for full resolution
-    size_t total_pixels = params.camera_resolution_full.x * params.camera_resolution_full.y;
-    if (total_pixels > 0) {
-        zeroBuffer1D(camera_pixel_label_RTbuffer, total_pixels);
-        zeroBuffer1D(camera_pixel_depth_RTbuffer, total_pixels);
-    }
+    // Set camera pixel offset for tiling
+    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_x_RTvariable, params.camera_pixel_offset.x));
+    RT_CHECK_ERROR(rtVariableSet1ui(camera_pixel_offset_y_RTvariable, params.camera_pixel_offset.y));
+
+    // NOTE: Camera pixel buffers must be zeroed BEFORE the tile loop, not here!
+    // Zeroing happens in zeroCameraPixelBuffers() called from RadiationModel.cpp
 
     // Launch pixel label rays: dimension = (1, resolution.x, resolution.y) - no antialiasing
     RT_CHECK_ERROR(rtContextLaunch3D(OptiX_Context, RAYTYPE_PIXEL_LABEL,
@@ -783,6 +785,19 @@ void OptiX6Backend::zeroScatterBuffers() {
     if (cam_scatter_size > 0) {
         zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
         zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);
+    }
+}
+
+void OptiX6Backend::zeroCameraPixelBuffers(const helios::int2& resolution) {
+    if (!is_initialized) {
+        helios_runtime_error("ERROR (OptiX6Backend::zeroCameraPixelBuffers): Backend not initialized.");
+    }
+
+    // Zero pixel label and depth buffers for full resolution
+    size_t total_pixels = resolution.x * resolution.y;
+    if (total_pixels > 0) {
+        zeroBuffer1D(camera_pixel_label_RTbuffer, total_pixels);
+        zeroBuffer1D(camera_pixel_depth_RTbuffer, total_pixels);
     }
 }
 

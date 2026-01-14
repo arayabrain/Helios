@@ -202,6 +202,17 @@ public:
     virtual void zeroScatterBuffers() = 0;
 
     /**
+     * @brief Zero camera pixel label and depth buffers
+     *
+     * @param[in] resolution Full camera resolution (width, height)
+     *
+     * Must be called before launching pixel label rays for multiple tiles.
+     * Each tile launch accumulates results without zeroing, so this must
+     * be called once before the tile loop to initialize the buffers.
+     */
+    virtual void zeroCameraPixelBuffers(const helios::int2& resolution) = 0;
+
+    /**
      * @brief Copy scatter buffer contents to radiation buffers
      *
      * Used for multi-bounce radiation: scattering iteration results are accumulated
