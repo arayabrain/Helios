@@ -2755,7 +2755,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     }
 
     // Check that all the bands passed to the runBand() method exist
-    for (const std::string &band: band_labels) {
+    for (const std::string &band: label) {
         if (!doesBandExist(band)) {
             helios_runtime_error("ERROR (RadiationModel::runBand): Cannot run band " + band + " because it is not a valid band. Use addRadiationBand() function to add the band.");
         }
