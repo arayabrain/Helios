@@ -356,6 +356,9 @@ void OptiX6Backend::initialize() {
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "Nprimitives", &Nprimitives_RTvariable));
     RT_CHECK_ERROR(rtVariableSet1ui(Nprimitives_RTvariable, 0));
 
+    RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "bbox_UUID_base", &bbox_UUID_base_RTvariable));
+    RT_CHECK_ERROR(rtVariableSet1ui(bbox_UUID_base_RTvariable, UINT_MAX)); // Initialize to sentinel (no bboxes)
+
     RT_CHECK_ERROR(rtContextDeclareVariable(OptiX_Context, "Nsources", &Nsources_RTvariable));
     RT_CHECK_ERROR(rtVariableSet1ui(Nsources_RTvariable, 0));
 
@@ -471,6 +474,7 @@ void OptiX6Backend::updateGeometry(const RayTracingGeometry& geometry) {
     current_bbox_count = geometry.bbox_count;
 
     RT_CHECK_ERROR(rtVariableSet1ui(Nprimitives_RTvariable, geometry.primitive_count));
+    RT_CHECK_ERROR(rtVariableSet1ui(bbox_UUID_base_RTvariable, geometry.bbox_UUID_base));
 
     // Update periodic boundary flags
     RT_CHECK_ERROR(rtVariableSet2f(periodic_flag_RTvariable, geometry.periodic_flag.x, geometry.periodic_flag.y));
@@ -750,10 +754,14 @@ void OptiX6Backend::zeroRadiationBuffers() {
         zeroBuffer1D(scatter_buff_bottom_RTbuffer, buffer_size);
     }
 
-    // Zero camera scatter buffers
-    if (current_camera_count > 0 && buffer_size > 0) {
-        zeroBuffer1D(scatter_buff_top_cam_RTbuffer, buffer_size);
-        zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, buffer_size);
+    // Zero camera scatter buffers (sized by primitive * band, NOT camera * primitive * band)
+    // Camera scatter uses same indexing as regular scatter: [primitive][band]
+    if (current_camera_count > 0) {
+        size_t cam_scatter_size = current_primitive_count * current_band_count;
+        if (cam_scatter_size > 0) {
+            zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
+            zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);
+        }
     }
 
     // Zero specular buffer (indexed by source, camera, primitive, band)
@@ -773,18 +781,29 @@ void OptiX6Backend::zeroScatterBuffers() {
         helios_runtime_error("ERROR (OptiX6Backend::zeroScatterBuffers): Backend not initialized.");
     }
 
-    // Zero scatter buffers
+    // Zero primitive scatter buffers (between iterations)
     size_t buffer_size = current_primitive_count * current_band_count;
     if (buffer_size > 0) {
         zeroBuffer1D(scatter_buff_top_RTbuffer, buffer_size);
         zeroBuffer1D(scatter_buff_bottom_RTbuffer, buffer_size);
     }
 
-    // Zero camera scatter buffers
-    size_t cam_scatter_size = current_camera_count * current_primitive_count * current_band_count;
-    if (cam_scatter_size > 0) {
-        zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
-        zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);
+    // NOTE: Camera scatter buffers are NOT zeroed here
+    // They accumulate across all scatter iterations and are only zeroed once in zeroRadiationBuffers()
+}
+
+void OptiX6Backend::zeroCameraScatterBuffers() {
+    if (!is_initialized) {
+        helios_runtime_error("ERROR (OptiX6Backend::zeroCameraScatterBuffers): Backend not initialized.");
+    }
+
+    // Zero camera scatter buffers (prevents double-counting when accumulating)
+    if (current_camera_count > 0) {
+        size_t buffer_size = current_primitive_count * current_band_count;
+        if (buffer_size > 0) {
+            zeroBuffer1D(scatter_buff_top_cam_RTbuffer, buffer_size);
+            zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, buffer_size);
+        }
     }
 }
 
@@ -822,6 +841,20 @@ void OptiX6Backend::uploadRadiationOut(const std::vector<float>& radiation_out_t
     }
     if (!radiation_out_bottom.empty()) {
         initializeBuffer1Df(radiation_out_bottom_RTbuffer, radiation_out_bottom);
+    }
+}
+
+void OptiX6Backend::uploadCameraScatterBuffers(const std::vector<float>& scatter_top_cam,
+                                                const std::vector<float>& scatter_bottom_cam) {
+    if (!is_initialized) {
+        helios_runtime_error("ERROR (OptiX6Backend::uploadCameraScatterBuffers): Backend not initialized.");
+    }
+
+    if (!scatter_top_cam.empty()) {
+        initializeBuffer1Df(scatter_buff_top_cam_RTbuffer, scatter_top_cam);
+    }
+    if (!scatter_bottom_cam.empty()) {
+        initializeBuffer1Df(scatter_buff_bottom_cam_RTbuffer, scatter_bottom_cam);
     }
 }
 
@@ -1321,10 +1354,12 @@ std::vector<uint> OptiX6Backend::getOptiXbufferData_ui(RTbuffer buffer) {
 void OptiX6Backend::geometryToBuffers(const RayTracingGeometry& geometry) {
     // Convert backend-agnostic geometry data to OptiX buffers
 
-    // Transform matrices: 1D vector → 2D buffer [primitive][16]
+    // Transform matrices: 1D vector → 2D buffer [primitive+bbox][16]
+    // Note: includes both real primitives AND bboxes
     if (!geometry.transform_matrices.empty()) {
-        std::vector<std::vector<float>> transform_2d(geometry.primitive_count);
-        for (size_t p = 0; p < geometry.primitive_count; p++) {
+        size_t total_count = geometry.primitive_count + geometry.bbox_count;
+        std::vector<std::vector<float>> transform_2d(total_count);
+        for (size_t p = 0; p < total_count; p++) {
             transform_2d[p].resize(16);
             for (int i = 0; i < 16; i++) {
                 transform_2d[p][i] = geometry.transform_matrices[p * 16 + i];
@@ -1450,12 +1485,20 @@ void OptiX6Backend::geometryToBuffers(const RayTracingGeometry& geometry) {
     // Texture masks
     if (!geometry.mask_data.empty()) {
         // Convert 1D bool array to 3D structure
+        // CRITICAL: All masks must have same dimensions for 3D buffer, so pad to max size
+        int max_width = 0, max_height = 0;
+        for (const auto& size : geometry.mask_sizes) {
+            max_width = std::max(max_width, size.x);
+            max_height = std::max(max_height, size.y);
+        }
+
         std::vector<std::vector<std::vector<bool>>> mask_3d;
         size_t offset = 0;
         for (size_t m = 0; m < geometry.mask_sizes.size(); m++) {
             int width = geometry.mask_sizes[m].x;
             int height = geometry.mask_sizes[m].y;
-            std::vector<std::vector<bool>> mask_2d(height, std::vector<bool>(width));
+            // Pad to max dimensions (padded regions will be false)
+            std::vector<std::vector<bool>> mask_2d(max_height, std::vector<bool>(max_width, false));
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     mask_2d[y][x] = geometry.mask_data[offset++];
@@ -1649,6 +1692,14 @@ void OptiX6Backend::buffersToResults(RayTracingResults& results) {
     results.radiation_out_bottom = getOptiXbufferData(radiation_out_bottom_RTbuffer);
     results.scatter_buff_top = getOptiXbufferData(scatter_buff_top_RTbuffer);
     results.scatter_buff_bottom = getOptiXbufferData(scatter_buff_bottom_RTbuffer);
+
+    // Extract camera scatter buffers (if cameras present)
+    // Use current_camera_count since results.num_cameras not set yet
+    if (current_camera_count > 0) {
+        results.scatter_buff_top_cam = getOptiXbufferData(scatter_buff_top_cam_RTbuffer);
+        results.scatter_buff_bottom_cam = getOptiXbufferData(scatter_buff_bottom_cam_RTbuffer);
+    }
+
     results.radiation_specular = getOptiXbufferData(radiation_specular_RTbuffer);
     results.sky_energy = getOptiXbufferData(Rsky_RTbuffer);
 }

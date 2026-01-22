@@ -110,6 +110,7 @@ rtBuffer<unsigned int, 1> bbox_UUID;
 
 // Primitive data
 rtDeclareVariable(unsigned int, Nprimitives, , );
+rtDeclareVariable(unsigned int, bbox_UUID_base, , ); // Starting UUID for bboxes (max_real_UUID + 1)
 rtDeclareVariable(float2, periodic_flag, , );
 rtBuffer<char, 1> twosided_flag;
 rtBuffer<float, 2> transform_matrix;

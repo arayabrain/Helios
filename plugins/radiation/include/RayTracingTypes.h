@@ -86,6 +86,7 @@ struct RayTracingGeometry {
     size_t tile_count = 0;                      //!< Number of tiles
     size_t voxel_count = 0;                     //!< Number of voxels
     size_t bbox_count = 0;                      //!< Number of bounding boxes
+    uint bbox_UUID_base = 0;                    //!< Starting UUID for bboxes (max_real_UUID + 1)
 
     // UUID ↔ Position mapping utility (CPU-side type-safe conversion)
     UUIDPositionMapper mapper;
@@ -246,6 +247,8 @@ struct RayTracingResults {
     std::vector<float> radiation_out_bottom;    //!< Emitted radiation (bottom face) per [primitive][band]
     std::vector<float> scatter_buff_top;        //!< Scattered radiation buffer (top) for multi-bounce
     std::vector<float> scatter_buff_bottom;     //!< Scattered radiation buffer (bottom) for multi-bounce
+    std::vector<float> scatter_buff_top_cam;    //!< Camera-weighted scattered radiation buffer (top) per [primitive][band]
+    std::vector<float> scatter_buff_bottom_cam; //!< Camera-weighted scattered radiation buffer (bottom) per [primitive][band]
     std::vector<float> radiation_specular;      //!< Specular reflection per [source][camera][primitive][band]
     std::vector<float> sky_energy;              //!< Energy absorbed by sky per band
 

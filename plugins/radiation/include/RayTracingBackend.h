@@ -232,6 +232,24 @@ public:
                                      const std::vector<float>& radiation_out_bottom) = 0;
 
     /**
+     * @brief Upload camera scatter buffers
+     *
+     * @param[in] scatter_top_cam Scattered radiation for cameras (top surface) indexed by [primitive * Nbands_launch + band]
+     * @param[in] scatter_bottom_cam Scattered radiation for cameras (bottom surface)
+     *
+     * Used to upload emission energy that cameras should see before scatter iterations.
+     */
+    virtual void uploadCameraScatterBuffers(const std::vector<float>& scatter_top_cam,
+                                           const std::vector<float>& scatter_bottom_cam) = 0;
+
+    /**
+     * @brief Zero camera scatter buffers (scatter_buff_top_cam, scatter_buff_bottom_cam)
+     *
+     * Used to prevent double-counting when accumulating camera scatter across multiple ray launches.
+     */
+    virtual void zeroCameraScatterBuffers() = 0;
+
+    /**
      * @brief Upload source flux values for launched bands
      *
      * @param[in] fluxes Source flux values indexed by [source * Nbands_launch + band]

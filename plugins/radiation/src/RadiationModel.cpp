@@ -1812,12 +1812,15 @@ void RadiationModel::updateRadiativeProperties() {
                         }
                     }
                 } else {
+                    // No wavelength bounds, can't integrate spectrum without camera response
+                    // Set to default for now, will use camera average if available
                     rho_unique[spectrum.first][b][s] = rho_default;
                 }
 
                 // cameras
                 if (Ncameras > 0) {
                     uint cam = 0;
+                    float rho_cam_sum_for_averaging = 0.f;
                     for (const auto &camera: cameras) {
 
                         if (camera_response_unique.at(cam).at(b).empty()) {
@@ -1832,10 +1835,12 @@ void RadiationModel::updateRadiativeProperties() {
                                     float cached_result = getCachedValue(cache_key, found);
                                     if (found) {
                                         rho_cam_unique.at(spectrum.first).at(b).at(s).at(cam) = cached_result;
+                                        rho_cam_sum_for_averaging += cached_result;
                                     } else {
                                         float result = cachedIntegrateSpectrumWithSourceAndCamera(s, spectrum.second, camera_response_unique.at(cam).at(b), cam, b, spectrum.first);
                                         setCachedValue(cache_key, result);
                                         rho_cam_unique.at(spectrum.first).at(b).at(s).at(cam) = result;
+                                        rho_cam_sum_for_averaging += result;
                                     }
                                 } else {
                                     std::string cache_key = createCacheKey(spectrum.first, s, b, cam, "rho_cam_no_source");
@@ -1843,10 +1848,12 @@ void RadiationModel::updateRadiativeProperties() {
                                     float cached_result = getCachedValue(cache_key, found);
                                     if (found) {
                                         rho_cam_unique.at(spectrum.first).at(b).at(s).at(cam) = cached_result;
+                                        rho_cam_sum_for_averaging += cached_result;
                                     } else {
                                         float result = integrateSpectrum(spectrum.second, camera_response_unique.at(cam).at(b));
                                         setCachedValue(cache_key, result);
                                         rho_cam_unique.at(spectrum.first).at(b).at(s).at(cam) = result;
+                                        rho_cam_sum_for_averaging += result;
                                     }
                                 }
                             } else {
@@ -1855,6 +1862,13 @@ void RadiationModel::updateRadiativeProperties() {
                         }
 
                         cam++;
+                    }
+
+                    // CRITICAL FIX: If wavelength bounds weren't set but camera integration produced values,
+                    // use camera average as the base reflectivity. This allows regular scatter to work
+                    // when only reflectivity_spectrum + camera response are provided.
+                    if (rho_unique[spectrum.first][b][s] == rho_default && rho_cam_sum_for_averaging > 0 && cam > 0) {
+                        rho_unique[spectrum.first][b][s] = rho_cam_sum_for_averaging / float(cam);
                     }
                 }
             }
@@ -3090,12 +3104,30 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     flux_top.resize(Nbands_launch * Nprimitives, 0);
     flux_bottom = flux_top;
 
+    // Camera scatter accumulation vectors (declare early for use throughout ray tracing)
+    std::vector<float> scatter_top_cam;
+    std::vector<float> scatter_bottom_cam;
+    if (Ncameras > 0) {
+        scatter_top_cam.resize(Nprimitives * Nbands_launch, 0.0f);
+        scatter_bottom_cam.resize(Nprimitives * Nbands_launch, 0.0f);
+    }
+
     if (scatteringenabled && rundirect) {
         // Get scattered energy from direct rays for primary diffuse/emission
         helios::RayTracingResults scatter_results;
         backend->getRadiationResults(scatter_results);
         flux_top = scatter_results.scatter_buff_top;
         flux_bottom = scatter_results.scatter_buff_bottom;
+
+        // Accumulate camera scatter from direct rays
+        if (Ncameras > 0) {
+            for (size_t i = 0; i < scatter_results.scatter_buff_top_cam.size(); i++) {
+                scatter_top_cam[i] += scatter_results.scatter_buff_top_cam[i];
+                scatter_bottom_cam[i] += scatter_results.scatter_buff_bottom_cam[i];
+            }
+            // Zero GPU camera scatter buffers to prevent double-counting on next iteration
+            backend->zeroCameraScatterBuffers();
+        }
 
         // For one-sided primitives, make scattered energy accessible from both faces
         // This is necessary because scattering rays can hit from either direction
@@ -3121,14 +3153,6 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     }
 
     // --- Diffuse/Emission launch ---- //
-
-    // Camera scatter accumulation vectors (broader scope for later upload)
-    std::vector<float> scatter_top_cam;
-    std::vector<float> scatter_bottom_cam;
-    if (Ncameras > 0) {
-        scatter_top_cam.resize(Nprimitives * Nbands_launch, 0.0f);
-        scatter_bottom_cam.resize(Nprimitives * Nbands_launch, 0.0f);
-    }
 
     if (emissionenabled || diffuseenabled) {
 
@@ -3181,6 +3205,12 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 }
             }
 
+        }
+
+        // Upload camera scatter buffers accumulated from emission, direct rays, and primary diffuse
+        // Camera scatter is accumulated on CPU from GPU after each ray launch
+        if (Ncameras > 0) {
+            backend->uploadCameraScatterBuffers(scatter_top_cam, scatter_bottom_cam);
         }
 
         // Note: radiation_specular_RTbuffer is populated on GPU via atomicFloatAdd during ray tracing, don't overwrite it here
@@ -3247,6 +3277,18 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             params.launch_face = 0;
             backend->launchDiffuseRays(params);
 
+            // Retrieve and accumulate camera scatter from primary diffuse
+            if (Ncameras > 0) {
+                helios::RayTracingResults primary_results;
+                backend->getRadiationResults(primary_results);
+                for (size_t i = 0; i < primary_results.scatter_buff_top_cam.size(); i++) {
+                    scatter_top_cam[i] += primary_results.scatter_buff_top_cam[i];
+                    scatter_bottom_cam[i] += primary_results.scatter_buff_bottom_cam[i];
+                }
+                // Zero GPU camera scatter buffers to prevent double-counting on next iteration
+                backend->zeroCameraScatterBuffers();
+            }
+
             if (message_flag) {
                 std::cout << "\r                                                                                                                               \r" << std::flush;
             }
@@ -3295,6 +3337,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
             }
 
             int b = -1;
+            int active_bands = 0;
             for (uint b_global = 0; b_global < Nbands_global; b_global++) {
 
                 if (scatter_band_flags.at(b_global) == 0) {
@@ -3308,25 +3351,24 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                         std::cout << "Skipping band " << band_labels.at(b) << " for scattering launch " << s + 1 << std::flush;
                     }
                     scatter_band_flags.at(b_global) = 0;  // FIX: Modify copy, not original
+                } else {
+                    active_bands++;
                 }
             }
 
-            // Copy scatter buffers to radiation_out for all iterations
-            // For s=0 with emission AND direct rays: radiation_out still contains emission from primary diffuse,
-            // which would cause double-counting if re-used. Copy scatter buffers to overwrite the emission.
-            // (If no direct rays, the pre-loop copyScatterToRadiation at line 3866 already handled this)
-            // For s=0 without emission: radiation_out contains scattered energy from direct rays.
-            // For s>0: radiation_out may have stale data, copy scatter buffers to update.
+            // Copy scatter buffers to radiation_out when needed
+            // For s=0 with emission+direct: primary diffuse uploaded emission+scatter via params, but we need to copy scatter to avoid double-counting emission on next iteration
+            // For s>0: scatter from previous iteration needs to be copied for next iteration
             if (s > 0 || (emissionenabled && rundirect)) {
                 backend->copyScatterToRadiation();
             }
             backend->zeroScatterBuffers();
 
-            // Extract radiation_out buffers to use as sources for next scattering iteration
+            // Extract radiation_out to ensure it's uploaded for scattering rays
             helios::RayTracingResults scatter_results;
             backend->getRadiationResults(scatter_results);
-            std::vector<float> flux_top = scatter_results.radiation_out_top;
-            std::vector<float> flux_bottom = scatter_results.radiation_out_bottom;
+            std::vector<float> flux_top_scatter = scatter_results.radiation_out_top;
+            std::vector<float> flux_bottom_scatter = scatter_results.radiation_out_bottom;
 
             for (uint launch = 0; launch < Nlaunches; launch++) {
 
@@ -3362,12 +3404,9 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 }
                 params.diffuse_peak_dir = peak_dirs;
 
-                // Pass radiation_out as sources for scattering rays
-                // Note: flux_top/flux_bottom contain data indexed by [primitive * Nbands_launch + launch_band]
-                // The data was written by CUDA using Nbands_launch indexing, so we don't need to re-index
-                // Just pass through the flux vectors directly - disabled bands won't have data anyway
-                params.radiation_out_top = flux_top;
-                params.radiation_out_bottom = flux_bottom;
+                // Set radiation_out for scattering rays
+                params.radiation_out_top = flux_top_scatter;
+                params.radiation_out_bottom = flux_bottom_scatter;
 
                 // Top surface launch
                 params.launch_face = 1;
@@ -3378,6 +3417,19 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 params.launch_face = 0;
                 backend->launchDiffuseRays(params);
             }
+
+            // Accumulate camera scatter from this scattering iteration
+            if (Ncameras > 0) {
+                helios::RayTracingResults post_launch;
+                backend->getRadiationResults(post_launch);
+                for (size_t i = 0; i < post_launch.scatter_buff_top_cam.size(); i++) {
+                    scatter_top_cam[i] += post_launch.scatter_buff_top_cam[i];
+                    scatter_bottom_cam[i] += post_launch.scatter_buff_bottom_cam[i];
+                }
+                // Zero GPU camera scatter buffers to prevent double-counting on next iteration
+                backend->zeroCameraScatterBuffers();
+            }
+
             if (message_flag) {
                 std::cout << "\r                                                                                                                           \r" << std::flush;
             }
@@ -3390,6 +3442,13 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
 
     // **** CAMERA RAY TRACE **** //
     if (Ncameras > 0) {
+
+        // Upload accumulated camera scatter to radiation_out for cameras to read
+        // scatter_top_cam contains camera-weighted scattered energy from all ray types
+        // Cameras read from radiation_out during hits, so we upload camera scatter there
+        if (Ncameras > 0 && scatteringenabled) {
+            backend->uploadRadiationOut(scatter_top_cam, scatter_bottom_cam);
+        }
 
         // Setup solar disk rendering for cameras (enables lens flare effects)
         // Find sun-like sources (collimated or sun_sphere) and compute solar disk radiance
@@ -3599,10 +3658,22 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                                         camera.second.pixel_depth,
                                         cam, camera.second.resolution);
 
-                // Convert IDs to actual UUIDs (KEEP EXISTING LOGIC)
+                // Convert IDs to actual UUIDs
+                // Pixel labels contain position+1 (1-indexed), need to convert to UUIDs
                 for (uint ID = 0; ID < camera.second.pixel_label_UUID.size(); ID++) {
                     if (camera.second.pixel_label_UUID.at(ID) > 0) {
-                        camera.second.pixel_label_UUID.at(ID) = context_UUIDs.at(camera.second.pixel_label_UUID.at(ID) - 1) + 1;
+                        uint position = camera.second.pixel_label_UUID.at(ID) - 1; // Convert to 0-indexed position
+
+                        // Check if this is a bbox hit (position >= primitive_count)
+                        if (position >= context_UUIDs.size()) {
+                            // Bbox: calculate UUID directly (bbox_UUID = bbox_UUID_base + bbox_index)
+                            uint bbox_index = position - context_UUIDs.size();
+                            uint bbox_UUID = geometry_data.bbox_UUID_base + bbox_index;
+                            camera.second.pixel_label_UUID.at(ID) = bbox_UUID + 1; // Store as 1-indexed
+                        } else {
+                            // Real primitive: look up UUID from context_UUIDs
+                            camera.second.pixel_label_UUID.at(ID) = context_UUIDs.at(position) + 1;
+                        }
                     }
                 }
 
@@ -5083,9 +5154,11 @@ void RadiationModel::buildGeometryData() {
     zbounds.x -= 1e-5;
     zbounds.y += 1e-5;
 
-    // Bbox UUIDs follow the old OptiX convention: Nprimitives + i
-    // This matches the original implementation for compatibility with shader code
-    uint bbox_UUID_base = Nprimitives;
+    // Bbox UUIDs must not collide with real primitive UUIDs
+    // Use max_UUID + 1 as base (not Nprimitives, which can cause collisions with sparse UUIDs)
+    uint max_UUID = geometry_data.primitive_UUIDs.empty() ? 0 :
+                    *std::max_element(geometry_data.primitive_UUIDs.begin(), geometry_data.primitive_UUIDs.end());
+    uint bbox_UUID_base = max_UUID + 1;
 
     // Create bbox faces based on periodic flags
     if (periodic_flag.x == 1) {
@@ -5124,8 +5197,14 @@ void RadiationModel::buildGeometryData() {
         bbox_idx++;
     }
 
-    // Update bbox count
+    // Update bbox count and UUID base
     geometry_data.bbox_count = bbox_idx;
+    if (bbox_idx > 0) {
+        geometry_data.bbox_UUID_base = bbox_UUID_base;
+    } else {
+        // No bboxes: set sentinel value so GPU knows all UUIDs are real primitives
+        geometry_data.bbox_UUID_base = UINT_MAX;
+    }
 
     // Add bbox primitive data so hit/intersection shaders can access them
     // Bbox positions are after real primitives: primitive_count + bbox_idx
@@ -5162,33 +5241,34 @@ void RadiationModel::buildGeometryData() {
     buildTextureData();
 
     // Build primitive_positions lookup table for GPU UUID→position conversion
-    // Size by max UUID to create sparse lookup table (include bbox UUIDs)
+    // Size by max UUID to create sparse lookup table (includes bbox UUIDs now that they don't collide)
     // Clear first to remove stale mappings from deleted primitives
     geometry_data.primitive_positions.clear();
     if (!geometry_data.primitive_UUIDs.empty()) {
         uint max_UUID = *std::max_element(geometry_data.primitive_UUIDs.begin(), geometry_data.primitive_UUIDs.end());
-        // Expand to include bbox UUIDs if present (bboxes use Nprimitives + i as UUID)
+
+        // Expand to include bbox UUIDs if present (they now use max_UUID+1 base, so no collisions)
+        uint bbox_max_UUID = max_UUID;
         if (geometry_data.bbox_count > 0) {
-            uint bbox_UUID_base = geometry_data.primitive_count;  // Nprimitives
-            uint max_bbox_UUID = bbox_UUID_base + geometry_data.bbox_count - 1;
-            if (max_bbox_UUID > max_UUID) {
-                max_UUID = max_bbox_UUID;  // Update max to include bbox UUIDs
-            }
+            bbox_max_UUID = geometry_data.bbox_UUID_base + geometry_data.bbox_count - 1;
         }
-        geometry_data.primitive_positions.resize(max_UUID + 1, UINT_MAX);  // UINT_MAX = invalid/unused
+
+        geometry_data.primitive_positions.resize(bbox_max_UUID + 1, UINT_MAX);  // UINT_MAX = invalid/unused
 
         // Map real primitive UUIDs
         for (size_t i = 0; i < geometry_data.primitive_count; i++) {
             uint UUID = geometry_data.primitive_UUIDs[i];
+            if (UUID >= geometry_data.primitive_positions.size()) {
+                std::cout << "[ERROR] UUID " << UUID << " >= buffer size " << geometry_data.primitive_positions.size() << std::endl;
+            }
             geometry_data.primitive_positions[UUID] = i;  // Map UUID → array position
         }
 
         // Map bbox UUIDs to their positions (after real primitives)
-        // Bbox UUIDs use old OptiX convention: Nprimitives + i
+        // Now safe because bbox_UUID_base = max_UUID + 1 (no collisions)
         if (geometry_data.bbox_count > 0) {
-            uint bbox_UUID_base = geometry_data.primitive_count;  // Nprimitives
             for (size_t i = 0; i < geometry_data.bbox_count; i++) {
-                uint bbox_UUID = bbox_UUID_base + i;
+                uint bbox_UUID = geometry_data.bbox_UUID_base + i;
                 geometry_data.primitive_positions[bbox_UUID] = geometry_data.primitive_count + i;
             }
         }
@@ -5383,6 +5463,7 @@ void RadiationModel::buildMaterialData() {
     material_data.num_cameras = cameras.size();
 
     // Allocate arrays (indexed as [source][primitive][band] using MaterialPropertyIndexer)
+    // NOTE: Bboxes don't need material properties (they only wrap rays for periodic boundaries)
     size_t total_size = Nsources * Nbands * Nprims;
     material_data.reflectivity.resize(total_size, 0.0f);
     material_data.transmissivity.resize(total_size, 0.0f);
@@ -5533,6 +5614,9 @@ void RadiationModel::buildMaterialData() {
         }
         b_idx++;
     }
+
+    // NOTE: Bboxes don't need material properties - they only wrap rays for periodic boundaries
+    // Material buffers are sized for real primitives only (Nprims), not including bboxes
 
     // Report any accumulated warnings
     warnings.report();

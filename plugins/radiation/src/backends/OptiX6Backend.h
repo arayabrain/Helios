@@ -110,6 +110,9 @@ public:
     void copyScatterToRadiation() override;
     void uploadRadiationOut(const std::vector<float>& radiation_out_top,
                             const std::vector<float>& radiation_out_bottom) override;
+    void uploadCameraScatterBuffers(const std::vector<float>& scatter_top_cam,
+                                    const std::vector<float>& scatter_bottom_cam) override;
+    void zeroCameraScatterBuffers() override;
     void uploadSourceFluxes(const std::vector<float>& fluxes) override;
 
     // Diagnostics
@@ -325,6 +328,7 @@ private:
     RTvariable launch_offset_RTvariable;
     RTvariable launch_face_RTvariable;
     RTvariable Nprimitives_RTvariable;
+    RTvariable bbox_UUID_base_RTvariable;
     RTvariable Nsources_RTvariable;
     RTvariable Nbands_global_RTvariable;
     RTvariable Nbands_launch_RTvariable;

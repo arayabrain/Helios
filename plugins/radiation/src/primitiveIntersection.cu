@@ -26,6 +26,7 @@ rtDeclareVariable(Ray, ray, rtCurrentRay, );
 rtDeclareVariable(PerRayData, prd, rtPayload, );
 
 rtDeclareVariable(unsigned int, UUID, attribute UUID, );
+// Note: Nprimitives is declared in RayTracing.cuh (for bbox position calculation)
 
 //----------------- Rectangle Primitive ----------------------//
 
@@ -381,8 +382,9 @@ RT_PROGRAM void bbox_intersect(int objID /**< [in] index of primitive in geometr
     if (prd.origin_UUID == bbox_UUID[objID]) { // the ray should not intersect the primitive from which it was launched
         return;
     }
-    // FIX: Convert UUID to position for twosided_flag access
-    uint position = primitive_positions[bbox_UUID[objID]];
+    // Bbox position is deterministic: Nprimitives + objID
+    // (bboxes are synthetic geometry, not in primitive_positions lookup table)
+    uint position = Nprimitives + objID;
     if (twosided_flag[position] >= 2) { // if twosided_flag=2, ignore intersection (transparent)
         return;
     }
