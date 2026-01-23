@@ -1836,6 +1836,9 @@ protected:
     //! Flag to determine if status messages are output to the screen
     bool message_flag;
 
+    //! Specular reflection mode: 0=disabled, 1=default scale (0.25), 2=user scale
+    uint specular_reflection_mode = 0;
+
     //! Pointer to the context
     helios::Context *context;
 

@@ -2178,16 +2178,36 @@ void RadiationModel::updateRadiativeProperties() {
     material_data.specular_exponent.resize(Nprimitives, -1.f);
     material_data.specular_scale.resize(Nprimitives, 0.f);
 
+    bool specular_exponent_specified = false;
+    bool specular_scale_specified = false;
+
     for (size_t u = 0; u < Nprimitives; u++) {
         uint UUID = context_UUIDs.at(u);
 
         if (context->doesPrimitiveDataExist(UUID, "specular_exponent") && context->getPrimitiveDataType("specular_exponent") == HELIOS_TYPE_FLOAT) {
             context->getPrimitiveData(UUID, "specular_exponent", material_data.specular_exponent.at(u));
+            if (material_data.specular_exponent.at(u) >= 0.f) {
+                specular_exponent_specified = true;
+            }
         }
 
         if (context->doesPrimitiveDataExist(UUID, "specular_scale") && context->getPrimitiveDataType("specular_scale") == HELIOS_TYPE_FLOAT) {
             context->getPrimitiveData(UUID, "specular_scale", material_data.specular_scale.at(u));
+            if (material_data.specular_scale.at(u) > 0.f) {
+                specular_scale_specified = true;
+            }
         }
+    }
+
+    // Auto-enable specular reflection if specular properties are specified on any primitive
+    if (specular_exponent_specified) {
+        if (specular_scale_specified) {
+            specular_reflection_mode = 2;  // Mode 2: use primitive specular_scale
+        } else {
+            specular_reflection_mode = 1;  // Mode 1: use default 0.25 scale
+        }
+    } else {
+        specular_reflection_mode = 0;  // Disabled
     }
 
     backend->updateMaterials(material_data);
@@ -4814,6 +4834,12 @@ helios::RayTracingLaunchParams RadiationModel::buildCameraLaunchParams(
     float pixel_angle_h = HFOV_rad / float(camera.resolution.x);
     float pixel_angle_v = VFOV_rad / float(camera.resolution.y);
     params.camera_pixel_solid_angle = pixel_angle_h * pixel_angle_v;
+
+    // Explicitly set scattering iteration for cameras (always iteration 0 for specular)
+    params.scattering_iteration = 0;
+
+    // Set specular reflection mode from user configuration
+    params.specular_reflection_enabled = specular_reflection_mode;
 
     return params;
 }
