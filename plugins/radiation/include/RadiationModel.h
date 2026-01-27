@@ -1956,8 +1956,10 @@ protected:
     void initializeOptiX();
 
     //! Sets radiative properties for all primitives
-    /** This function should be called anytime primitive radiative properties are modified. If radiative properties were not set in the Context, default radiative properties will be applied (black body).
-        \note \ref RadiationModel::updateRadiativeProperties() must be called before simulation can be run
+    /** DEPRECATED: This function is no longer required - material properties are automatically updated when runBand() is called.
+        Handles spectrum-based material loading and camera spectral response weighting.
+        Called internally during runBand() when spectrum interpolation is configured.
+        \note This is a private method called automatically - users should not call this directly.
     */
     void updateRadiativeProperties();
 

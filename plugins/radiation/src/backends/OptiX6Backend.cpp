@@ -737,12 +737,19 @@ void OptiX6Backend::getCameraResults(
     pixel_depths = getOptiXbufferData(camera_pixel_depth_RTbuffer);
 }
 
-void OptiX6Backend::zeroRadiationBuffers() {
+void OptiX6Backend::zeroRadiationBuffers(size_t launch_band_count) {
     if (!is_initialized) {
         helios_runtime_error("ERROR (OptiX6Backend::zeroRadiationBuffers): Backend not initialized.");
     }
 
-    // Zero all radiation result buffers
+    // Validation: launch bands cannot exceed global bands
+    if (launch_band_count > current_band_count) {
+        helios_runtime_error("ERROR (OptiX6Backend::zeroRadiationBuffers): launch_band_count ("
+            + std::to_string(launch_band_count) + ") exceeds current_band_count ("
+            + std::to_string(current_band_count) + ").");
+    }
+
+    // Zero all radiation result buffers (use current_band_count for global accumulation)
     // Note: Bbox primitives don't accumulate radiation (they only wrap rays),
     // so buffers are sized for real primitives only
     size_t buffer_size = current_primitive_count * current_band_count;
@@ -754,17 +761,17 @@ void OptiX6Backend::zeroRadiationBuffers() {
         zeroBuffer1D(scatter_buff_bottom_RTbuffer, buffer_size);
     }
 
-    // Zero camera scatter buffers (sized by primitive * band, NOT camera * primitive * band)
+    // Zero camera scatter buffers (use launch_band_count for per-launch sizing)
     // Camera scatter uses same indexing as regular scatter: [primitive][band]
     if (current_camera_count > 0) {
-        size_t cam_scatter_size = current_primitive_count * current_band_count;
+        size_t cam_scatter_size = current_primitive_count * launch_band_count;
         if (cam_scatter_size > 0) {
             zeroBuffer1D(scatter_buff_top_cam_RTbuffer, cam_scatter_size);
             zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, cam_scatter_size);
         }
     }
 
-    // Zero specular buffer (indexed by source, camera, primitive, band)
+    // Zero specular buffer (use current_band_count for global accumulation)
     size_t specular_size = current_source_count * current_camera_count * current_primitive_count * current_band_count;
     if (specular_size > 0) {
         zeroBuffer1D(radiation_specular_RTbuffer, specular_size);
@@ -792,14 +799,21 @@ void OptiX6Backend::zeroScatterBuffers() {
     // They accumulate across all scatter iterations and are only zeroed once in zeroRadiationBuffers()
 }
 
-void OptiX6Backend::zeroCameraScatterBuffers() {
+void OptiX6Backend::zeroCameraScatterBuffers(size_t launch_band_count) {
     if (!is_initialized) {
         helios_runtime_error("ERROR (OptiX6Backend::zeroCameraScatterBuffers): Backend not initialized.");
     }
 
-    // Zero camera scatter buffers (prevents double-counting when accumulating)
+    // Validation: launch bands cannot exceed global bands
+    if (launch_band_count > current_band_count) {
+        helios_runtime_error("ERROR (OptiX6Backend::zeroCameraScatterBuffers): launch_band_count ("
+            + std::to_string(launch_band_count) + ") exceeds current_band_count ("
+            + std::to_string(current_band_count) + ").");
+    }
+
+    // Zero camera scatter buffers (use launch_band_count for per-launch sizing)
     if (current_camera_count > 0) {
-        size_t buffer_size = current_primitive_count * current_band_count;
+        size_t buffer_size = current_primitive_count * launch_band_count;
         if (buffer_size > 0) {
             zeroBuffer1D(scatter_buff_top_cam_RTbuffer, buffer_size);
             zeroBuffer1D(scatter_buff_bottom_cam_RTbuffer, buffer_size);

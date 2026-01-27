@@ -104,7 +104,7 @@ public:
         const helios::int2& resolution) override;
 
     // Buffer utilities
-    void zeroRadiationBuffers() override;
+    void zeroRadiationBuffers(size_t launch_band_count) override;
     void zeroScatterBuffers() override;
     void zeroCameraPixelBuffers(const helios::int2& resolution) override;
     void copyScatterToRadiation() override;
@@ -112,7 +112,7 @@ public:
                             const std::vector<float>& radiation_out_bottom) override;
     void uploadCameraScatterBuffers(const std::vector<float>& scatter_top_cam,
                                     const std::vector<float>& scatter_bottom_cam) override;
-    void zeroCameraScatterBuffers() override;
+    void zeroCameraScatterBuffers(size_t launch_band_count) override;
     void uploadSourceFluxes(const std::vector<float>& fluxes) override;
 
     // Diagnostics

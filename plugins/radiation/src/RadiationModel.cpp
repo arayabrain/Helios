@@ -2975,7 +2975,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
     }
 
     // Zero radiation buffers via backend
-    backend->zeroRadiationBuffers();
+    backend->zeroRadiationBuffers(Nbands_launch);
 
     std::vector<float> TBS_top, TBS_bottom;
     TBS_top.resize(Nbands_launch * Nprimitives, 0);
@@ -3082,7 +3082,16 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 }
             }
 
-            // Camera-weighted source fluxes already uploaded via backend->updateSources()
+            // Update source_data with camera-weighted fluxes and re-upload to backend
+            for (uint s = 0; s < Nsources; s++) {
+                source_data[s].fluxes_cam.clear();
+                for (uint b = 0; b < Nbands_launch; b++) {
+                    for (uint cam = 0; cam < Ncameras; cam++) {
+                        source_data[s].fluxes_cam.push_back(source_fluxes_cam[s * Nbands_launch * Ncameras + b * Ncameras + cam]);
+                    }
+                }
+            }
+            backend->updateSources(source_data);
         }
 
         // -- Ray Trace (Using Backend) -- //
@@ -3146,7 +3155,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                 scatter_bottom_cam[i] += scatter_results.scatter_buff_bottom_cam[i];
             }
             // Zero GPU camera scatter buffers to prevent double-counting on next iteration
-            backend->zeroCameraScatterBuffers();
+            backend->zeroCameraScatterBuffers(Nbands_launch);
         }
 
         // For one-sided primitives, make scattered energy accessible from both faces
@@ -3306,7 +3315,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                     scatter_bottom_cam[i] += primary_results.scatter_buff_bottom_cam[i];
                 }
                 // Zero GPU camera scatter buffers to prevent double-counting on next iteration
-                backend->zeroCameraScatterBuffers();
+                backend->zeroCameraScatterBuffers(Nbands_launch);
             }
 
             if (message_flag) {
@@ -3447,7 +3456,7 @@ void RadiationModel::runBand(const std::vector<std::string> &label) {
                     scatter_bottom_cam[i] += post_launch.scatter_buff_bottom_cam[i];
                 }
                 // Zero GPU camera scatter buffers to prevent double-counting on next iteration
-                backend->zeroCameraScatterBuffers();
+                backend->zeroCameraScatterBuffers(Nbands_launch);
             }
 
             if (message_flag) {
@@ -4838,7 +4847,7 @@ helios::RayTracingLaunchParams RadiationModel::buildCameraLaunchParams(
     // Explicitly set scattering iteration for cameras (always iteration 0 for specular)
     params.scattering_iteration = 0;
 
-    // Set specular reflection mode from user configuration
+    // Set specular reflection mode from auto-detection
     params.specular_reflection_enabled = specular_reflection_mode;
 
     return params;
@@ -5493,7 +5502,7 @@ void RadiationModel::buildMaterialData() {
     size_t total_size = Nsources * Nbands * Nprims;
     material_data.reflectivity.resize(total_size, 0.0f);
     material_data.transmissivity.resize(total_size, 0.0f);
-    material_data.specular_exponent.resize(Nprims, 10.0f);
+    material_data.specular_exponent.resize(Nprims, -1.0f);  // Default -1 means disabled
     material_data.specular_scale.resize(Nprims, 0.0f);
 
     // Create indexer for material properties: [source][primitive][band]
@@ -5643,6 +5652,39 @@ void RadiationModel::buildMaterialData() {
 
     // NOTE: Bboxes don't need material properties - they only wrap rays for periodic boundaries
     // Material buffers are sized for real primitives only (Nprims), not including bboxes
+
+    // Load specular reflection properties from primitive data
+    bool specular_exponent_specified = false;
+    bool specular_scale_specified = false;
+
+    for (size_t p = 0; p < Nprims; p++) {
+        uint UUID = geometry_data.primitive_UUIDs[p];
+
+        if (context->doesPrimitiveDataExist(UUID, "specular_exponent") && context->getPrimitiveDataType("specular_exponent") == helios::HELIOS_TYPE_FLOAT) {
+            context->getPrimitiveData(UUID, "specular_exponent", material_data.specular_exponent.at(p));
+            if (material_data.specular_exponent.at(p) >= 0.f) {
+                specular_exponent_specified = true;
+            }
+        }
+
+        if (context->doesPrimitiveDataExist(UUID, "specular_scale") && context->getPrimitiveDataType("specular_scale") == helios::HELIOS_TYPE_FLOAT) {
+            context->getPrimitiveData(UUID, "specular_scale", material_data.specular_scale.at(p));
+            if (material_data.specular_scale.at(p) > 0.f) {
+                specular_scale_specified = true;
+            }
+        }
+    }
+
+    // Auto-enable specular reflection if specular properties are specified on any primitive
+    if (specular_exponent_specified) {
+        if (specular_scale_specified) {
+            specular_reflection_mode = 2;  // Mode 2: use primitive specular_scale
+        } else {
+            specular_reflection_mode = 1;  // Mode 1: use default 0.25 scale
+        }
+    } else {
+        specular_reflection_mode = 0;  // Disabled
+    }
 
     // Report any accumulated warnings
     warnings.report();

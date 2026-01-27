@@ -6116,7 +6116,7 @@ DOCTEST_TEST_CASE("Phase1.E Step5: Backend Functional Validation - Direct Radiat
     DOCTEST_REQUIRE_NOTHROW(radiation.getBackend()->updateSources(radiation.getSourceData()));
 
     // Zero radiation buffers
-    radiation.getBackend()->zeroRadiationBuffers();
+    radiation.getBackend()->zeroRadiationBuffers(1);
 
     // Launch direct rays through backend
     helios::RayTracingLaunchParams params;
@@ -6178,7 +6178,7 @@ DOCTEST_TEST_CASE("Phase1.E Step6: Backend Functional Validation - Diffuse Radia
     DOCTEST_REQUIRE_NOTHROW(radiation.getBackend()->updateMaterials(radiation.getMaterialData()));
 
     // Zero radiation buffers
-    radiation.getBackend()->zeroRadiationBuffers();
+    radiation.getBackend()->zeroRadiationBuffers(1);
 
     // Build diffuse launch parameters
     helios::RayTracingLaunchParams params;
@@ -6255,7 +6255,7 @@ DOCTEST_TEST_CASE("Phase1.E Step6b: Backend Diffuse With Partial Occlusion") {
     radiation.getBackend()->updateGeometry(radiation.getGeometryData());
     radiation.getBackend()->buildAccelerationStructure();
     radiation.getBackend()->updateMaterials(radiation.getMaterialData());
-    radiation.getBackend()->zeroRadiationBuffers();
+    radiation.getBackend()->zeroRadiationBuffers(1);
 
     // Launch diffuse rays FROM PATCH0 ONLY
     helios::RayTracingLaunchParams params;
@@ -6327,7 +6327,7 @@ DOCTEST_TEST_CASE("RadiationModel Multi-Patch Direct Radiation Occlusion Test") 
     radiation.getBackend()->buildAccelerationStructure();
     radiation.getBackend()->updateMaterials(radiation.getMaterialData());
     radiation.getBackend()->updateSources(radiation.getSourceData());
-    radiation.getBackend()->zeroRadiationBuffers();
+    radiation.getBackend()->zeroRadiationBuffers(1);
 
     // Launch direct rays (SMALL ray count for debug)
     helios::RayTracingLaunchParams params;
@@ -7028,4 +7028,207 @@ DOCTEST_TEST_CASE("RadiationModel - Data Label Maps Match Segmentation Mask Coor
     std::remove("./coord_match_masks.json");
     std::remove(image_file.c_str());
 }
+
+DOCTEST_TEST_CASE("Material Backend Migration - Spectrum Interpolation Integration") {
+    // Test that spectrum interpolation configs are properly applied in buildMaterialData()
+
+    helios::Context context;
+    RadiationModel radiationmodel(&context);
+    radiationmodel.disableMessages();
+
+    // Create spectral data for different ages
+    std::vector<helios::vec2> spectrum_young = {{400, 0.1}, {500, 0.15}, {600, 0.2}, {700, 0.25}};
+    std::vector<helios::vec2> spectrum_old = {{400, 0.5}, {500, 0.55}, {600, 0.6}, {700, 0.65}};
+
+    context.setGlobalData("rho_young", spectrum_young);
+    context.setGlobalData("rho_old", spectrum_old);
+
+    // Create test primitive
+    uint uuid = context.addPatch(helios::make_vec3(0, 0, 0), helios::make_vec2(1, 1));
+    context.setPrimitiveData(uuid, "leaf_age", 8.0f); // Should select "rho_old" (closer to 10 than 0)
+
+    // Set up interpolation config
+    std::vector<uint> uuids = {uuid};
+    std::vector<std::string> spectra = {"rho_young", "rho_old"};
+    std::vector<float> values = {0.0f, 10.0f};
+    radiationmodel.interpolateSpectrumFromPrimitiveData(uuids, spectra, values, "leaf_age", "reflectivity_spectrum");
+
+    // Add band with wavelength bounds for spectral integration
+    radiationmodel.addRadiationBand("PAR", 400.f, 700.f);
+    radiationmodel.disableEmission("PAR"); // Disable emission to avoid energy conservation errors
+    radiationmodel.setScatteringDepth("PAR", 1); // Enable scattering so material calculation runs
+
+    // Add source with constant flux
+    uint source = radiationmodel.addCollimatedRadiationSource();
+    radiationmodel.setSourceFlux(source, "PAR", 1000.f);
+
+    // Update geometry and run - this triggers buildMaterialData()
+    radiationmodel.updateGeometry();
+    radiationmodel.runBand("PAR");
+
+    // Verify that interpolation was applied
+    std::string assigned_spectrum;
+    DOCTEST_REQUIRE(context.doesPrimitiveDataExist(uuid, "reflectivity_spectrum"));
+    context.getPrimitiveData(uuid, "reflectivity_spectrum", assigned_spectrum);
+    DOCTEST_CHECK(assigned_spectrum == "rho_old");
+}
+
+DOCTEST_TEST_CASE("Material Backend Migration - Camera Weighted Materials") {
+    // Test that camera-weighted materials are correctly calculated with spectral responses
+
+    helios::Context context;
+    RadiationModel radiationmodel(&context);
+    radiationmodel.disableMessages();
+
+    // Create object spectrum (reflectivity)
+    std::vector<helios::vec2> object_spectrum = {{400, 0.1}, {500, 0.3}, {600, 0.5}, {700, 0.7}};
+    context.setGlobalData("object_rho", object_spectrum);
+
+    // Create camera spectral response (Gaussian-like, peaked at 550nm)
+    std::vector<helios::vec2> camera_response = {{400, 0.2}, {500, 0.8}, {600, 0.8}, {700, 0.2}};
+    context.setGlobalData("camera_green", camera_response);
+
+    // Create source spectrum (sunlight-like)
+    std::vector<helios::vec2> source_spectrum = {{400, 0.8}, {500, 1.0}, {600, 1.0}, {700, 0.9}};
+    context.setGlobalData("sunlight", source_spectrum);
+
+    // Create test primitive with spectral reflectivity
+    uint uuid = context.addPatch(helios::make_vec3(0, 0, 0), helios::make_vec2(1, 1));
+    context.setPrimitiveData(uuid, "reflectivity_spectrum", std::string("object_rho"));
+
+    // Add band with wavelength bounds
+    radiationmodel.addRadiationBand("VIS", 400.f, 700.f);
+    radiationmodel.disableEmission("VIS"); // Disable emission to avoid energy conservation errors
+
+    // Add source with spectrum
+    uint source = radiationmodel.addCollimatedRadiationSource();
+    radiationmodel.setSourceFlux(source, "VIS", 1000.f);
+    radiationmodel.setSourceSpectrum(source, "sunlight");
+
+    // Add camera with spectral response
+    CameraProperties cam_props;
+    cam_props.camera_resolution = helios::make_int2(10, 10);
+    cam_props.HFOV = 45.f;
+    cam_props.focal_plane_distance = 2.0f;
+    cam_props.lens_diameter = 0.0f; // Pinhole
+
+    std::vector<std::string> band_labels = {"VIS"};
+    radiationmodel.addRadiationCamera("test_cam", band_labels, helios::make_vec3(0, -5, 0), helios::make_vec3(0, 0, 0), cam_props, 1);
+    radiationmodel.setCameraSpectralResponse("test_cam", "VIS", "camera_green");
+
+    // Update and run
+    radiationmodel.updateGeometry();
+    radiationmodel.runBand("VIS");
+
+    // Verify camera data was generated
+    DOCTEST_CHECK(context.doesGlobalDataExist("camera_test_cam_VIS"));
+
+    // Get camera data
+    if (context.doesGlobalDataExist("camera_test_cam_VIS")) {
+        std::vector<float> camera_data;
+        context.getGlobalData("camera_test_cam_VIS", camera_data);
+        DOCTEST_CHECK(camera_data.size() == 100); // 10x10 pixels
+    }
+}
+
+DOCTEST_TEST_CASE("RadiationModel - Specular Reflection Camera Rendering") {
+    // Test that setting specular_exponent affects camera rendering
+    // This verifies specular reflection is enabled and working correctly
+
+    Context context;
+    RadiationModel radiation(&context);
+    radiation.disableMessages();
+
+    // Create patch at origin facing +Z
+    uint UUID = context.addPatch(make_vec3(0, 0, 0), make_vec2(1, 1));
+    context.setPrimitiveData(UUID, "twosided_flag", uint(1));
+
+    // Set low diffuse reflectivity to isolate specular contribution
+    std::vector<helios::vec2> reflectivity;
+    reflectivity.push_back(make_vec2(400, 0.05f));
+    reflectivity.push_back(make_vec2(700, 0.05f));
+    context.setGlobalData("reflectivity", reflectivity);
+    context.setPrimitiveData(UUID, "reflectivity_spectrum", "reflectivity");
+
+    std::vector<helios::vec2> zero_transmissivity;
+    zero_transmissivity.push_back(make_vec2(400, 0.0f));
+    zero_transmissivity.push_back(make_vec2(700, 0.0f));
+    context.setGlobalData("zero_transmissivity", zero_transmissivity);
+    context.setPrimitiveData(UUID, "transmissivity_spectrum", "zero_transmissivity");
+
+    // Setup radiation band and source
+    radiation.addRadiationBand("SUN");
+    radiation.setScatteringDepth("SUN", 1);
+
+    helios::vec3 sun_direction = helios::make_vec3(0, 0, 1);  // Sun above (direction points TO sun)
+    uint source = radiation.addCollimatedRadiationSource(sun_direction);
+    radiation.setSourceFlux(source, "SUN", 1000.0f);
+    radiation.setDirectRayCount("SUN", 10000);
+    radiation.setDiffuseRayCount("SUN", 0);
+    radiation.disableEmission("SUN");
+
+    // Camera looking straight down at patch
+    helios::vec3 camera_pos = helios::make_vec3(0, 0, 2.0f);
+    helios::vec3 camera_lookat = helios::make_vec3(0, 0, 0);
+    CameraProperties cam_props;
+    cam_props.camera_resolution = make_int2(32, 32);
+    cam_props.lens_diameter = 0.0f;
+    cam_props.focal_plane_distance = 2.0f;
+    cam_props.HFOV = 30.0f;
+    radiation.addRadiationCamera("test_cam", {"SUN"}, camera_pos, camera_lookat, cam_props, 1);
+
+    // Set camera spectral response
+    std::vector<helios::vec2> camera_response;
+    camera_response.push_back(make_vec2(400, 1.0f));
+    camera_response.push_back(make_vec2(700, 1.0f));
+    context.setGlobalData("camera_response", camera_response);
+    radiation.setCameraSpectralResponse("test_cam", "SUN", "camera_response");
+
+    // TEST 1: specular_exponent = -1 (disabled)
+    std::string output1;
+    {
+        capture_cout capture;
+        context.setPrimitiveData(UUID, "specular_exponent", -1.0f);
+        radiation.updateGeometry();
+        radiation.runBand("SUN");
+        output1 = capture.get_captured_output();
+    }
+
+    std::vector<float> pixels_no_specular;
+    context.getGlobalData("camera_test_cam_SUN", pixels_no_specular);
+
+    float sum_no_specular = 0.0f;
+    for (float p : pixels_no_specular) {
+        sum_no_specular += p;
+    }
+    float avg_no_specular = sum_no_specular / pixels_no_specular.size();
+
+    // TEST 2: specular_exponent = 50 (strong specular highlight)
+    std::string output2;
+    {
+        capture_cout capture;
+        context.setPrimitiveData(UUID, "specular_exponent", 50.0f);
+        radiation.updateGeometry();
+        radiation.runBand("SUN");
+        output2 = capture.get_captured_output();
+    }
+
+    std::vector<float> pixels_with_specular;
+    context.getGlobalData("camera_test_cam_SUN", pixels_with_specular);
+
+    float sum_with_specular = 0.0f;
+    for (float p : pixels_with_specular) {
+        sum_with_specular += p;
+    }
+    float avg_with_specular = sum_with_specular / pixels_with_specular.size();
+
+    float difference = avg_with_specular - avg_no_specular;
+
+    // Verify specular exponent changes camera intensity
+    DOCTEST_CHECK_MESSAGE(std::abs(difference) > 1.0f,
+                          "Specular exponent should affect camera intensity. "
+                          "No specular: " << avg_no_specular << ", With specular: " << avg_with_specular <<
+                          ", Difference: " << difference);
+}
+
 

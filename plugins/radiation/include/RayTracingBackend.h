@@ -193,8 +193,13 @@ public:
 
     /**
      * @brief Zero all radiation result buffers (radiation_in, radiation_out, radiation_specular)
+     *
+     * @param[in] launch_band_count Number of bands being launched in current iteration
+     *
+     * Camera scatter buffers are sized by launch_band_count (not global band count) to match
+     * per-launch accumulation semantics. All other buffers use the global band count.
      */
-    virtual void zeroRadiationBuffers() = 0;
+    virtual void zeroRadiationBuffers(size_t launch_band_count) = 0;
 
     /**
      * @brief Zero scatter buffers (scatter_buff_top, scatter_buff_bottom)
@@ -245,9 +250,12 @@ public:
     /**
      * @brief Zero camera scatter buffers (scatter_buff_top_cam, scatter_buff_bottom_cam)
      *
-     * Used to prevent double-counting when accumulating camera scatter across multiple ray launches.
+     * @param[in] launch_band_count Number of bands being launched in current iteration
+     *
+     * Buffers are sized by launch_band_count to prevent double-counting when accumulating
+     * camera scatter across multiple ray launches.
      */
-    virtual void zeroCameraScatterBuffers() = 0;
+    virtual void zeroCameraScatterBuffers(size_t launch_band_count) = 0;
 
     /**
      * @brief Upload source flux values for launched bands
