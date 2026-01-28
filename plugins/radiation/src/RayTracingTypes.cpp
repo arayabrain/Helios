@@ -35,19 +35,16 @@ void RayTracingGeometry::validate() const {
     // NOTE: primitive_positions now includes bbox UUIDs (safe due to bbox_UUID_base = max_UUID + 1)
     if (!primitive_UUIDs.empty()) {
         uint max_uuid = *std::max_element(primitive_UUIDs.begin(), primitive_UUIDs.end());
-        std::cout << "[VALIDATION DEBUG] max_uuid=" << max_uuid << " bbox_count=" << bbox_count << " bbox_UUID_base=" << bbox_UUID_base << std::endl;
 
         // Include bbox UUIDs in expected size if present
         if (bbox_count > 0) {
             uint bbox_max_uuid = bbox_UUID_base + bbox_count - 1;
-            std::cout << "[VALIDATION DEBUG] bbox_max_uuid=" << bbox_max_uuid << std::endl;
             if (bbox_max_uuid > max_uuid) {
                 max_uuid = bbox_max_uuid;
             }
         }
 
         size_t expected_size = max_uuid + 1;
-        std::cout << "[VALIDATION DEBUG] expected_size=" << expected_size << " actual_size=" << primitive_positions.size() << std::endl;
 
         if (primitive_positions.size() != expected_size) {
             helios_runtime_error("RayTracingGeometry validation failed: primitive_positions.size()=" +

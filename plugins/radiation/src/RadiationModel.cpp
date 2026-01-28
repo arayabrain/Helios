@@ -5293,9 +5293,6 @@ void RadiationModel::buildGeometryData() {
         // Map real primitive UUIDs
         for (size_t i = 0; i < geometry_data.primitive_count; i++) {
             uint UUID = geometry_data.primitive_UUIDs[i];
-            if (UUID >= geometry_data.primitive_positions.size()) {
-                std::cout << "[ERROR] UUID " << UUID << " >= buffer size " << geometry_data.primitive_positions.size() << std::endl;
-            }
             geometry_data.primitive_positions[UUID] = i;  // Map UUID → array position
         }
 
