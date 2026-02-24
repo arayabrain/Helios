@@ -68,6 +68,8 @@ void PlantArchitecture::initializePlantModelRegistrations() {
 
     registerPlantModel("grapevine_Wye", [this]() { initializeGrapevineWyeShoots(); }, [this](const helios::vec3 &pos) { return buildGrapevineWye(pos); });
 
+    registerPlantModel("grapevine_Pergola", [this]() { initializeGrapevinePergolaShoots(); }, [this](const helios::vec3 &pos) { return buildGrapevinePergola(pos); });
+
     registerPlantModel("groundcherryweed", [this]() { initializeGroundCherryWeedShoots(); }, [this](const helios::vec3 &pos) { return buildGroundCherryWeedPlant(pos); }, "weed");
 
     registerPlantModel("maize", [this]() { initializeMaizeShoots(); }, [this](const helios::vec3 &pos) { return buildMaizePlant(pos); });
@@ -2362,6 +2364,193 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
 
     removeShootVegetativeBuds(plantID, uID_upright_L);
     removeShootVegetativeBuds(plantID, uID_upright_R);
+
+    setPlantPhenologicalThresholds(plantID, 165, -1, -1, 45, 45, 200, false);
+
+    plant_instances.at(plantID).max_age = 365;
+
+    return plantID;
+}
+
+void PlantArchitecture::initializeGrapevinePergolaShoots() {
+
+    // ---- Leaf Prototype ---- //
+
+    LeafPrototype leaf_prototype(context_ptr->getRandomGenerator());
+    leaf_prototype.leaf_texture_file[0] = "GrapeLeaf.png";
+    leaf_prototype.leaf_aspect_ratio = 1.f;
+    leaf_prototype.midrib_fold_fraction = 0.3f;
+    leaf_prototype.longitudinal_curvature.uniformDistribution(-0.4, 0.4);
+    leaf_prototype.lateral_curvature = 0;
+    leaf_prototype.wave_period = 0.3f;
+    leaf_prototype.wave_amplitude = 0.1f;
+    leaf_prototype.subdivisions = 5;
+    leaf_prototype.unique_prototypes = 10;
+    leaf_prototype.leaf_offset = make_vec3(-0.3, 0, 0);
+
+    // ---- Phytomer Parameters ---- //
+
+    PhytomerParameters phytomer_parameters_grapevine(context_ptr->getRandomGenerator());
+
+    phytomer_parameters_grapevine.internode.pitch = 20;
+    phytomer_parameters_grapevine.internode.phyllotactic_angle.uniformDistribution(160, 200);
+    phytomer_parameters_grapevine.internode.radius_initial = 0.003;
+    phytomer_parameters_grapevine.internode.color = make_RGBcolor(0.23, 0.13, 0.062);
+    phytomer_parameters_grapevine.internode.length_segments = 1;
+    phytomer_parameters_grapevine.internode.max_floral_buds_per_petiole = 1;
+    phytomer_parameters_grapevine.internode.max_vegetative_buds_per_petiole = 1;
+
+    phytomer_parameters_grapevine.petiole.petioles_per_internode = 1;
+    phytomer_parameters_grapevine.petiole.color = make_RGBcolor(0.13, 0.125, 0.03);
+    phytomer_parameters_grapevine.petiole.pitch.uniformDistribution(45, 70);
+    phytomer_parameters_grapevine.petiole.radius = 0.0025;
+    phytomer_parameters_grapevine.petiole.length = 0.1;
+    phytomer_parameters_grapevine.petiole.taper = 0;
+    phytomer_parameters_grapevine.petiole.curvature = 0;
+    phytomer_parameters_grapevine.petiole.length_segments = 1;
+
+    phytomer_parameters_grapevine.leaf.leaves_per_petiole = 1;
+    phytomer_parameters_grapevine.leaf.pitch.uniformDistribution(-110, -80);
+    phytomer_parameters_grapevine.leaf.yaw.uniformDistribution(-20, 20);
+    phytomer_parameters_grapevine.leaf.roll.uniformDistribution(-5, 5);
+    phytomer_parameters_grapevine.leaf.prototype_scale = 0.2;
+    phytomer_parameters_grapevine.leaf.prototype = leaf_prototype;
+
+    phytomer_parameters_grapevine.peduncle.length = 0.04;
+    phytomer_parameters_grapevine.peduncle.radius = 0.005;
+    phytomer_parameters_grapevine.peduncle.color = make_RGBcolor(0.13, 0.125, 0.03);
+    phytomer_parameters_grapevine.peduncle.pitch.uniformDistribution(80, 100);
+
+    phytomer_parameters_grapevine.inflorescence.flowers_per_peduncle = 1;
+    phytomer_parameters_grapevine.inflorescence.pitch = 0;
+    phytomer_parameters_grapevine.inflorescence.flower_prototype_scale = 0.04;
+    phytomer_parameters_grapevine.inflorescence.fruit_prototype_function = GrapevineFruitPrototype;
+    phytomer_parameters_grapevine.inflorescence.fruit_prototype_scale = 0.04;
+    phytomer_parameters_grapevine.inflorescence.fruit_gravity_factor_fraction = 0.9;
+
+    phytomer_parameters_grapevine.phytomer_creation_function = GrapevinePhytomerCreationFunction;
+
+    // ---- Shoot Parameters ---- //
+
+    ShootParameters shoot_parameters_main(context_ptr->getRandomGenerator());
+    shoot_parameters_main.phytomer_parameters = phytomer_parameters_grapevine;
+    shoot_parameters_main.vegetative_bud_break_probability_min = 0.025;
+    shoot_parameters_main.vegetative_bud_break_probability_decay_rate = -1.;
+    shoot_parameters_main.vegetative_bud_break_time = 30;
+    shoot_parameters_main.phyllochron_min.uniformDistribution(2.5, 3.5);
+    shoot_parameters_main.elongation_rate_max = 0.15;
+    shoot_parameters_main.girth_area_factor = 0.8f;
+    shoot_parameters_main.gravitropic_curvature.uniformDistribution(0, 80);
+    shoot_parameters_main.tortuosity = 8;
+    shoot_parameters_main.internode_length_max.uniformDistribution(0.04, 0.06);
+    shoot_parameters_main.internode_length_decay_rate = 0;
+    shoot_parameters_main.insertion_angle_tip = 45;
+    shoot_parameters_main.insertion_angle_decay_rate = 0;
+    shoot_parameters_main.flowers_require_dormancy = false;
+    shoot_parameters_main.growth_requires_dormancy = false;
+    shoot_parameters_main.determinate_shoot_growth = false;
+    shoot_parameters_main.max_terminal_floral_buds = 0;
+    shoot_parameters_main.flower_bud_break_probability = 0.5;
+    shoot_parameters_main.fruit_set_probability = 0.2;
+    shoot_parameters_main.max_nodes.uniformDistribution(15, 22);
+    shoot_parameters_main.base_roll.uniformDistribution(0, 360);
+    shoot_parameters_main.base_yaw.uniformDistribution(-90, 90);
+
+    ShootParameters shoot_parameters_cordon = shoot_parameters_main;
+    shoot_parameters_cordon.phytomer_parameters.internode.image_texture = "GrapeBark.jpg";
+    shoot_parameters_cordon.phytomer_parameters.internode.pitch = 0;
+    shoot_parameters_cordon.phytomer_parameters.internode.radial_subdivisions = 15;
+    shoot_parameters_cordon.phytomer_parameters.internode.max_floral_buds_per_petiole = 0;
+    shoot_parameters_cordon.phytomer_parameters.internode.phyllotactic_angle = 0;
+    shoot_parameters_cordon.insertion_angle_tip.uniformDistribution(60, 120);
+    shoot_parameters_cordon.girth_area_factor = 3.5f;
+    shoot_parameters_cordon.max_nodes = 10;
+    shoot_parameters_cordon.tortuosity = 1;
+    shoot_parameters_cordon.gravitropic_curvature = 0;
+    shoot_parameters_cordon.vegetative_bud_break_probability_min = 0.9;
+    shoot_parameters_cordon.base_yaw = 0;
+    shoot_parameters_cordon.defineChildShootTypes({"grapevine_shoot"}, {1.f});
+
+    ShootParameters shoot_parameters_trunk = shoot_parameters_main;
+    shoot_parameters_trunk.phytomer_parameters.internode.image_texture = "GrapeBark.jpg";
+    shoot_parameters_trunk.phytomer_parameters.internode.pitch = 0;
+    shoot_parameters_trunk.phytomer_parameters.internode.phyllotactic_angle = 0;
+    shoot_parameters_trunk.phytomer_parameters.internode.radius_initial = 0.05;
+    shoot_parameters_trunk.phytomer_parameters.internode.radial_subdivisions = 25;
+    shoot_parameters_trunk.phytomer_parameters.internode.max_floral_buds_per_petiole = 0;
+    shoot_parameters_trunk.phyllochron_min = 2.5;
+    shoot_parameters_trunk.insertion_angle_tip = 90;
+    shoot_parameters_trunk.girth_area_factor = 0;
+    shoot_parameters_trunk.max_nodes = 20;
+    shoot_parameters_trunk.tortuosity = 0;
+    shoot_parameters_trunk.vegetative_bud_break_probability_min = 0;
+    shoot_parameters_trunk.defineChildShootTypes({"grapevine_shoot"}, {1.f});
+
+    defineShootType("grapevine_trunk", shoot_parameters_trunk);
+    defineShootType("grapevine_cordon", shoot_parameters_cordon);
+    defineShootType("grapevine_shoot", shoot_parameters_main);
+}
+
+uint PlantArchitecture::buildGrapevinePergola(const helios::vec3 &base_position) {
+
+    if (shoot_types.empty()) {
+        initializeGrapevinePergolaShoots();
+    }
+
+    // Get training system parameters
+    auto trunk_height = getParameterValue(current_build_parameters, "trunk_height", 1.8f, 1.5f, 2.1f, "trunk height in meters");
+    auto cordon_length = getParameterValue(current_build_parameters, "cordon_length", 1.2f, 0.8f, 1.5f, "cordon length in meters");
+    auto pergola_height = getParameterValue(current_build_parameters, "pergola_height", 1.86f, 1.6f, 2.1f, "pergola wire grid height in meters");
+    auto wire_spacing = getParameterValue(current_build_parameters, "wire_spacing", 0.4f, 0.3f, 0.5f, "wire grid spacing in meters");
+
+    // Calculate trunk nodes based on desired height
+    float trunk_internode_length = trunk_height / 20.f;
+    uint trunk_nodes = 20;
+
+    // Cordon parameters
+    float cordon_internode_length = cordon_length / 10.f;
+    uint cordon_nodes = 10;
+    float cordon_radius = 0.02f;
+
+    // Build horizontal wire grid as attraction points (2D grid at pergola_height)
+    float grid_extent = cordon_length + 0.5f; // extend slightly beyond cordon reach
+    std::vector<std::vector<vec3>> trellis_points;
+
+    int n_wires = int(2.f * grid_extent / wire_spacing) + 1;
+    // Wires along X direction
+    for (int i = 0; i < n_wires; i++) {
+        float y = -grid_extent + i * wire_spacing;
+        trellis_points.push_back(linspace(make_vec3(-grid_extent, y, pergola_height), make_vec3(grid_extent, y, pergola_height), 8));
+    }
+    // Wires along Y direction
+    for (int i = 0; i < n_wires; i++) {
+        float x = -grid_extent + i * wire_spacing;
+        trellis_points.push_back(linspace(make_vec3(x, -grid_extent, pergola_height), make_vec3(x, grid_extent, pergola_height), 8));
+    }
+
+    for (int j = 0; j < trellis_points.size(); j++) {
+        for (int i = 0; i < trellis_points[j].size(); i++) {
+            trellis_points.at(j).at(i) += base_position;
+        }
+    }
+
+    uint plantID = addPlantInstance(base_position, 0);
+
+    setPlantAttractionPoints(plantID, flatten(trellis_points), 60.f, 1.0f, 0.8);
+
+    uint uID_stem = addBaseStemShoot(plantID, trunk_nodes, make_AxisRotation(0., 0, 0), shoot_types.at("grapevine_trunk").phytomer_parameters.internode.radius_initial.val(), trunk_internode_length, 1, 1, 0.1, "grapevine_trunk");
+
+    // 4 cordons at 90-degree intervals (cross / raggiera pattern)
+    uint uID_cordon_0 = appendShoot(plantID, uID_stem, cordon_nodes, make_AxisRotation(deg2rad(90), 0, M_PI), cordon_radius, cordon_internode_length, 1, 1, 0.5, "grapevine_cordon");
+    uint uID_cordon_1 = appendShoot(plantID, uID_stem, cordon_nodes, make_AxisRotation(deg2rad(90), 0.5 * M_PI, M_PI), cordon_radius, cordon_internode_length, 1, 1, 0.5, "grapevine_cordon");
+    uint uID_cordon_2 = appendShoot(plantID, uID_stem, cordon_nodes, make_AxisRotation(deg2rad(90), M_PI, M_PI), cordon_radius, cordon_internode_length, 1, 1, 0.5, "grapevine_cordon");
+    uint uID_cordon_3 = appendShoot(plantID, uID_stem, cordon_nodes, make_AxisRotation(deg2rad(90), 1.5 * M_PI, M_PI), cordon_radius, cordon_internode_length, 1, 1, 0.5, "grapevine_cordon");
+
+    removeShootLeaves(plantID, uID_stem);
+    removeShootLeaves(plantID, uID_cordon_0);
+    removeShootLeaves(plantID, uID_cordon_1);
+    removeShootLeaves(plantID, uID_cordon_2);
+    removeShootLeaves(plantID, uID_cordon_3);
 
     setPlantPhenologicalThresholds(plantID, 165, -1, -1, 45, 45, 200, false);
 
