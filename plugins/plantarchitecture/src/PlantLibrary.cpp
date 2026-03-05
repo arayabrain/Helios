@@ -2272,7 +2272,7 @@ void PlantArchitecture::initializeGrapevineWyeShoots() {
     shoot_parameters_trunk.phyllochron_min = 2.5;
     shoot_parameters_trunk.insertion_angle_tip = 90;
     shoot_parameters_trunk.girth_area_factor = 0;
-    shoot_parameters_trunk.max_nodes = 18;
+    shoot_parameters_trunk.max_nodes = 60;
     shoot_parameters_trunk.tortuosity = 2;
     shoot_parameters_trunk.vegetative_bud_break_probability_min = 0;
     shoot_parameters_trunk.defineChildShootTypes({"grapevine_shoot"}, {1.f});
@@ -2290,7 +2290,7 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     }
 
     // Get training system parameters
-    auto trunk_height_total = getParameterValue(current_build_parameters, "trunk_height", 0.165f, 0.05f, 1.f, "total trunk height in meters");
+    auto trunk_height_total = getParameterValue(current_build_parameters, "trunk_height", 0.7f, 0.05f, 2.f, "total trunk height in meters");
     auto cordon_spacing = getParameterValue(current_build_parameters, "cordon_spacing", 0.6f, 0.2f, 2.f, "spacing between cordon rows in meters");
     auto vine_spacing = getParameterValue(current_build_parameters, "vine_spacing", 1.8f, 0.5f, 5.f, "plant-to-plant spacing in meters");
     auto catch_wire_height = getParameterValue(current_build_parameters, "catch_wire_height", 2.1f, 0.5f, 4.f, "absolute height of catch wires in meters");
@@ -2304,12 +2304,17 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     // Calculate trellis head height from catch wire height (catch wires above fruiting wires)
     float head_height = catch_wire_height - 0.35f; // Offset to match original geometry
 
-    // Fixed training parameters (not user-customizable)
-    uint upright_nodes = 3;
+    // Upright (Y-arm) parameters — computed dynamically so arms reach head_height
     float upright_pitch_min = 42.f;
     float upright_pitch_max = 48.f;
     float upright_radius = 0.03f;
-    float upright_length = 0.14f;
+    float avg_pitch_rad = deg2rad(0.5f * (upright_pitch_min + upright_pitch_max));
+    float vertical_gap = head_height - trunk_height_total;
+    if (vertical_gap < 0.1f) vertical_gap = 0.1f;
+    float upright_total_length = vertical_gap / cosf(avg_pitch_rad);
+    float upright_internode = 0.15f;
+    uint upright_nodes = std::max(3u, (uint)ceilf(upright_total_length / upright_internode));
+    float upright_length = upright_total_length / (float)upright_nodes;
     uint cordon_nodes = 8;
     float cordon_radius = 0.02f;
     float cordon_length = 0.11f;
