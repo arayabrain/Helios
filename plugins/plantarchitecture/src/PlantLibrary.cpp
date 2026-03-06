@@ -2231,9 +2231,9 @@ void PlantArchitecture::initializeGrapevineWyeShoots() {
     shoot_parameters_main.phyllochron_min.uniformDistribution(2.5, 3.5);
     shoot_parameters_main.elongation_rate_max = 0.15;
     shoot_parameters_main.girth_area_factor = 0.8f;
-    shoot_parameters_main.gravitropic_curvature.uniformDistribution(0, 100);
-    shoot_parameters_main.tortuosity = 10;
-    shoot_parameters_main.internode_length_max.uniformDistribution(0.06, 0.08);
+    shoot_parameters_main.gravitropic_curvature.uniformDistribution(0, 80);
+    shoot_parameters_main.tortuosity = 8;
+    shoot_parameters_main.internode_length_max.uniformDistribution(0.04, 0.06);
     shoot_parameters_main.internode_length_decay_rate = 0;
     shoot_parameters_main.insertion_angle_tip = 45;
     shoot_parameters_main.insertion_angle_decay_rate = 0;
@@ -2244,8 +2244,8 @@ void PlantArchitecture::initializeGrapevineWyeShoots() {
     shoot_parameters_main.flower_bud_break_probability = 0.5;
     shoot_parameters_main.fruit_set_probability = 0.2;
     shoot_parameters_main.max_nodes.uniformDistribution(14, 18);
-    shoot_parameters_main.base_roll.uniformDistribution(90 - 25, 90 + 25);
-    shoot_parameters_main.base_yaw.uniformDistribution(-50, 50);
+    shoot_parameters_main.base_roll.uniformDistribution(0, 360);
+    shoot_parameters_main.base_yaw.uniformDistribution(-90, 90);
 
     ShootParameters shoot_parameters_cordon = shoot_parameters_main;
     shoot_parameters_cordon.phytomer_parameters.internode.image_texture = "GrapeBark.jpg";
@@ -2272,8 +2272,9 @@ void PlantArchitecture::initializeGrapevineWyeShoots() {
     shoot_parameters_trunk.phyllochron_min = 2.5;
     shoot_parameters_trunk.insertion_angle_tip = 90;
     shoot_parameters_trunk.girth_area_factor = 0;
-    shoot_parameters_trunk.max_nodes = 60;
-    shoot_parameters_trunk.tortuosity = 2;
+    shoot_parameters_trunk.max_nodes = 20;
+    shoot_parameters_trunk.tortuosity = 0;
+    shoot_parameters_trunk.gravitropic_curvature = 0;
     shoot_parameters_trunk.vegetative_bud_break_probability_min = 0;
     shoot_parameters_trunk.defineChildShootTypes({"grapevine_shoot"}, {1.f});
 
@@ -2295,11 +2296,9 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     auto vine_spacing = getParameterValue(current_build_parameters, "vine_spacing", 1.8f, 0.5f, 5.f, "plant-to-plant spacing in meters");
     auto catch_wire_height = getParameterValue(current_build_parameters, "catch_wire_height", 2.1f, 0.5f, 4.f, "absolute height of catch wires in meters");
 
-    // Calculate trunk nodes based on desired height
-    float trunk_internode_length = 0.165f / 8.f; // Original was 8 nodes * 0.165m total
-    uint trunk_nodes = uint(trunk_height_total / trunk_internode_length);
-    if (trunk_nodes < 1)
-        trunk_nodes = 1;
+    // Calculate trunk nodes based on desired height (like Pergola: fixed node count, adjust internode length)
+    uint trunk_nodes = 20;
+    float trunk_internode_length = trunk_height_total / (float)trunk_nodes;
 
     // Calculate trellis head height from catch wire height (catch wires above fruiting wires)
     float head_height = catch_wire_height - 0.35f; // Offset to match original geometry
@@ -2346,7 +2345,7 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     uint plantID = addPlantInstance(base_position, 0);
 
     // Set plant-specific attraction points for this grapevine's trellis system
-    setPlantAttractionPoints(plantID, flatten(trellis_points), 45.f, 0.5f, 0.5);
+    setPlantAttractionPoints(plantID, flatten(trellis_points), 60.f, 1.0f, 0.8);
 
     uint uID_stem = addBaseStemShoot(plantID, trunk_nodes, make_AxisRotation(0., 0, 0), shoot_types.at("grapevine_trunk").phytomer_parameters.internode.radius_initial.val(), trunk_internode_length, 1, 1, 0.1, "grapevine_trunk");
 
