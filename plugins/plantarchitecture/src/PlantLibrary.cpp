@@ -2296,6 +2296,11 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     auto vine_spacing = getParameterValue(current_build_parameters, "vine_spacing", 1.8f, 0.5f, 5.f, "plant-to-plant spacing in meters");
     auto catch_wire_height = getParameterValue(current_build_parameters, "catch_wire_height", 2.1f, 0.5f, 4.f, "absolute height of catch wires in meters");
 
+    // Wire level toggles: 1=on (default), 0=off
+    auto wire_level_mid = getParameterValue(current_build_parameters, "wire_level_mid", 1.f, 0.f, 1.f, "enable mid-arm guide wires (0=off, 1=on)");
+    auto wire_level_fruiting = getParameterValue(current_build_parameters, "wire_level_fruiting", 1.f, 0.f, 1.f, "enable fruiting wires (0=off, 1=on)");
+    auto wire_level_catch = getParameterValue(current_build_parameters, "wire_level_catch", 1.f, 0.f, 1.f, "enable catch wires (0=off, 1=on)");
+
     // Trunk
     uint trunk_nodes = 20;
     float trunk_internode_length = trunk_height_total / (float)trunk_nodes;
@@ -2316,30 +2321,36 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
     float cordon_radius = 0.02f;
     float cordon_length = 0.11f;
 
-    // --- Trellis attraction points ---
+    // --- Trellis attraction points (conditionally enabled by wire_level_* toggles) ---
     std::vector<std::vector<vec3>> trellis_points;
     float half_x = 0.5f * vine_spacing;
-
-    // Fruiting wires at Y-arm tips (along X at head_height)
-    trellis_points.push_back(linspace(make_vec3(-half_x, -arm_spread, head_height),
-                                      make_vec3(half_x, -arm_spread, head_height), 8));
-    trellis_points.push_back(linspace(make_vec3(-half_x, arm_spread, head_height),
-                                      make_vec3(half_x, arm_spread, head_height), 8));
-
-    // Mid-arm guide wires (along X at 50% of arm height — helps guide shoot growth along Y-slope)
     float mid_z = trunk_height_total + 0.5f * vertical_gap;
     float mid_y = 0.5f * arm_spread;
-    trellis_points.push_back(linspace(make_vec3(-half_x, -mid_y, mid_z),
-                                      make_vec3(half_x, -mid_y, mid_z), 8));
-    trellis_points.push_back(linspace(make_vec3(-half_x, mid_y, mid_z),
-                                      make_vec3(half_x, mid_y, mid_z), 8));
-
-    // Catch wires at top (slightly wider and higher than arm tips)
     float catch_y = arm_spread + 0.15f;
-    trellis_points.push_back(linspace(make_vec3(-half_x, -catch_y, catch_wire_height),
-                                      make_vec3(half_x, -catch_y, catch_wire_height), 8));
-    trellis_points.push_back(linspace(make_vec3(-half_x, catch_y, catch_wire_height),
-                                      make_vec3(half_x, catch_y, catch_wire_height), 8));
+
+    // Level 1: Mid-arm guide wires (along X at 50% of arm height)
+    if (wire_level_mid > 0.5f) {
+        trellis_points.push_back(linspace(make_vec3(-half_x, -mid_y, mid_z),
+                                          make_vec3(half_x, -mid_y, mid_z), 8));
+        trellis_points.push_back(linspace(make_vec3(-half_x, mid_y, mid_z),
+                                          make_vec3(half_x, mid_y, mid_z), 8));
+    }
+
+    // Level 2: Fruiting wires at Y-arm tips (along X at head_height)
+    if (wire_level_fruiting > 0.5f) {
+        trellis_points.push_back(linspace(make_vec3(-half_x, -arm_spread, head_height),
+                                          make_vec3(half_x, -arm_spread, head_height), 8));
+        trellis_points.push_back(linspace(make_vec3(-half_x, arm_spread, head_height),
+                                          make_vec3(half_x, arm_spread, head_height), 8));
+    }
+
+    // Level 3: Catch wires at top (slightly wider and higher than arm tips)
+    if (wire_level_catch > 0.5f) {
+        trellis_points.push_back(linspace(make_vec3(-half_x, -catch_y, catch_wire_height),
+                                          make_vec3(half_x, -catch_y, catch_wire_height), 8));
+        trellis_points.push_back(linspace(make_vec3(-half_x, catch_y, catch_wire_height),
+                                          make_vec3(half_x, catch_y, catch_wire_height), 8));
+    }
 
     for (int j = 0; j < trellis_points.size(); j++) {
         for (int i = 0; i < trellis_points[j].size(); i++) {
