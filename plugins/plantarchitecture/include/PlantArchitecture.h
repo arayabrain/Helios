@@ -2707,6 +2707,17 @@ public:
      */
     [[nodiscard]] std::vector<uint> getPlantFruitObjectIDs(uint plantID) const;
 
+    //! Label each fruit bunch with a unique object_label for OBJ export
+    /**
+     * Sets "object_label" = "fruit_bunch_XXXX" on all primitives of each
+     * fruit bunch, so that Context::writeOBJ() outputs them as separate
+     * "o" groups. One FloralBud = one bunch.
+     *
+     * \param[in] plantID ID of the plant instance.
+     * \return Number of bunches labeled.
+     */
+    uint labelFruitBunchesForExport(uint plantID);
+
     //! Assign a fruit count value for each shoot on a plant
     /**
      * \param[in] plantID ID of the plant instance.

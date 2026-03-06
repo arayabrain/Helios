@@ -4566,6 +4566,35 @@ std::vector<uint> PlantArchitecture::getPlantFruitObjectIDs(uint plantID) const 
     return objIDs;
 }
 
+uint PlantArchitecture::labelFruitBunchesForExport(uint plantID) {
+    if (plant_instances.find(plantID) == plant_instances.end()) {
+        helios_runtime_error("ERROR (PlantArchitecture::labelFruitBunchesForExport): Plant with ID of " + std::to_string(plantID) + " does not exist.");
+    }
+
+    auto &shoot_tree = plant_instances.at(plantID).shoot_tree;
+    uint bunch_idx = 0;
+
+    for (auto &shoot : shoot_tree) {
+        for (auto &phytomer : shoot->phytomers) {
+            for (auto &petiole_buds : phytomer->floral_buds) {
+                for (auto &fbud : petiole_buds) {
+                    if (fbud.state != BUD_FRUITING || fbud.inflorescence_objIDs.empty())
+                        continue;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "fruit_bunch_%04u", bunch_idx);
+                    std::string label(buf);
+                    for (uint objID : fbud.inflorescence_objIDs) {
+                        auto prims = context_ptr->getObjectPrimitiveUUIDs(objID);
+                        context_ptr->setPrimitiveData(prims, "object_label", label);
+                    }
+                    bunch_idx++;
+                }
+            }
+        }
+    }
+
+    return bunch_idx;
+}
 
 void PlantArchitecture::updateShootFruitCounts(uint plantID) const {
     if (plant_instances.find(plantID) == plant_instances.end()) {
