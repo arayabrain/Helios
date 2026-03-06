@@ -2292,49 +2292,54 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
 
     // Get training system parameters
     auto trunk_height_total = getParameterValue(current_build_parameters, "trunk_height", 0.7f, 0.05f, 2.f, "total trunk height in meters");
-    auto cordon_spacing = getParameterValue(current_build_parameters, "cordon_spacing", 0.6f, 0.2f, 2.f, "spacing between cordon rows in meters");
+    auto cordon_spacing = getParameterValue(current_build_parameters, "cordon_spacing", 1.2f, 0.4f, 3.f, "total Y-arm spread at tips in meters");
     auto vine_spacing = getParameterValue(current_build_parameters, "vine_spacing", 1.8f, 0.5f, 5.f, "plant-to-plant spacing in meters");
     auto catch_wire_height = getParameterValue(current_build_parameters, "catch_wire_height", 2.1f, 0.5f, 4.f, "absolute height of catch wires in meters");
 
-    // Calculate trunk nodes based on desired height (like Pergola: fixed node count, adjust internode length)
+    // Trunk
     uint trunk_nodes = 20;
     float trunk_internode_length = trunk_height_total / (float)trunk_nodes;
 
-    // Calculate trellis head height from catch wire height (catch wires above fruiting wires)
-    float head_height = catch_wire_height - 0.35f; // Offset to match original geometry
-
-    // Upright (Y-arm) parameters — computed dynamically so arms reach head_height
-    float upright_pitch_min = 42.f;
-    float upright_pitch_max = 48.f;
-    float upright_radius = 0.03f;
-    float avg_pitch_rad = deg2rad(0.5f * (upright_pitch_min + upright_pitch_max));
+    // Y-arm geometry — arm angle computed from cordon_spacing and height gap
+    float head_height = catch_wire_height - 0.15f;
     float vertical_gap = head_height - trunk_height_total;
     if (vertical_gap < 0.1f) vertical_gap = 0.1f;
-    float upright_total_length = vertical_gap / cosf(avg_pitch_rad);
-    float upright_internode = 0.15f;
-    uint upright_nodes = std::max(3u, (uint)ceilf(upright_total_length / upright_internode));
+    float arm_spread = 0.5f * cordon_spacing;                  // Y-spread per arm
+    float arm_pitch_deg = atan2f(arm_spread, vertical_gap) * 180.f / M_PI;  // angle from vertical
+    float upright_total_length = sqrtf(vertical_gap * vertical_gap + arm_spread * arm_spread);
+    float upright_radius = 0.03f;
+    uint upright_nodes = std::max(3u, (uint)ceilf(upright_total_length / 0.15f));
     float upright_length = upright_total_length / (float)upright_nodes;
+
+    // Cordon parameters (horizontal along row from arm tips)
     uint cordon_nodes = 8;
     float cordon_radius = 0.02f;
     float cordon_length = 0.11f;
-    float catch_wire_offset_1 = 0.15f;
-    float catch_wire_offset_2 = 0.35f;
 
+    // --- Trellis attraction points ---
     std::vector<std::vector<vec3>> trellis_points;
+    float half_x = 0.5f * vine_spacing;
 
-    // fruiting wires
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, -0.5f * cordon_spacing, head_height), make_vec3(0.5f * vine_spacing, -0.5f * cordon_spacing, head_height), 8));
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, 0.5f * cordon_spacing, head_height), make_vec3(0.5f * vine_spacing, 0.5f * cordon_spacing, head_height), 8));
+    // Fruiting wires at Y-arm tips (along X at head_height)
+    trellis_points.push_back(linspace(make_vec3(-half_x, -arm_spread, head_height),
+                                      make_vec3(half_x, -arm_spread, head_height), 8));
+    trellis_points.push_back(linspace(make_vec3(-half_x, arm_spread, head_height),
+                                      make_vec3(half_x, arm_spread, head_height), 8));
 
-    // first catch wires (these don't exist in a real Wye trellis, but are needed to keep the vines from falling through the wires)
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, -0.5f * cordon_spacing - catch_wire_offset_1, catch_wire_height - catch_wire_offset_2),
-                                      make_vec3(0.5f * vine_spacing, -0.5f * cordon_spacing - catch_wire_offset_1, catch_wire_height - catch_wire_offset_2), 8));
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, 0.5f * cordon_spacing + catch_wire_offset_1, catch_wire_height - catch_wire_offset_2),
-                                      make_vec3(0.5f * vine_spacing, 0.5f * cordon_spacing + catch_wire_offset_1, catch_wire_height - catch_wire_offset_2), 8));
+    // Mid-arm guide wires (along X at 50% of arm height — helps guide shoot growth along Y-slope)
+    float mid_z = trunk_height_total + 0.5f * vertical_gap;
+    float mid_y = 0.5f * arm_spread;
+    trellis_points.push_back(linspace(make_vec3(-half_x, -mid_y, mid_z),
+                                      make_vec3(half_x, -mid_y, mid_z), 8));
+    trellis_points.push_back(linspace(make_vec3(-half_x, mid_y, mid_z),
+                                      make_vec3(half_x, mid_y, mid_z), 8));
 
-    // second catch wires (at specified height)
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, -0.5f * cordon_spacing - catch_wire_offset_2, catch_wire_height), make_vec3(0.5f * vine_spacing, -0.5f * cordon_spacing - catch_wire_offset_2, catch_wire_height), 8));
-    trellis_points.push_back(linspace(make_vec3(-0.5f * vine_spacing, 0.5f * cordon_spacing + catch_wire_offset_2, catch_wire_height), make_vec3(0.5f * vine_spacing, 0.5f * cordon_spacing + catch_wire_offset_2, catch_wire_height), 8));
+    // Catch wires at top (slightly wider and higher than arm tips)
+    float catch_y = arm_spread + 0.15f;
+    trellis_points.push_back(linspace(make_vec3(-half_x, -catch_y, catch_wire_height),
+                                      make_vec3(half_x, -catch_y, catch_wire_height), 8));
+    trellis_points.push_back(linspace(make_vec3(-half_x, catch_y, catch_wire_height),
+                                      make_vec3(half_x, catch_y, catch_wire_height), 8));
 
     for (int j = 0; j < trellis_points.size(); j++) {
         for (int i = 0; i < trellis_points[j].size(); i++) {
@@ -2349,9 +2354,11 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
 
     uint uID_stem = addBaseStemShoot(plantID, trunk_nodes, make_AxisRotation(0., 0, 0), shoot_types.at("grapevine_trunk").phytomer_parameters.internode.radius_initial.val(), trunk_internode_length, 1, 1, 0.1, "grapevine_trunk");
 
-    uint uID_upright_L = appendShoot(plantID, uID_stem, upright_nodes, make_AxisRotation(deg2rad(context_ptr->randu(upright_pitch_min, upright_pitch_max)), 0, M_PI), upright_radius, upright_length, 1, 1, 0.2, "grapevine_trunk");
-    uint uID_upright_R = appendShoot(plantID, uID_stem, upright_nodes, make_AxisRotation(deg2rad(context_ptr->randu(upright_pitch_min, upright_pitch_max)), M_PI, M_PI), upright_radius, upright_length, 1, 1, 0.2, "grapevine_trunk");
+    // Y-arms: pitch angle computed from cordon_spacing and height gap
+    uint uID_upright_L = appendShoot(plantID, uID_stem, upright_nodes, make_AxisRotation(deg2rad(arm_pitch_deg), 0, M_PI), upright_radius, upright_length, 1, 1, 0.2, "grapevine_trunk");
+    uint uID_upright_R = appendShoot(plantID, uID_stem, upright_nodes, make_AxisRotation(deg2rad(arm_pitch_deg), M_PI, M_PI), upright_radius, upright_length, 1, 1, 0.2, "grapevine_trunk");
 
+    // Cordons: extend along X (row direction) from Y-arm tips — shoots turn 90° here
     uint uID_cordon_L1 = appendShoot(plantID, uID_upright_L, cordon_nodes, make_AxisRotation(deg2rad(-90), 0.5 * M_PI, -0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
     uint uID_cordon_L2 = appendShoot(plantID, uID_upright_L, cordon_nodes, make_AxisRotation(deg2rad(-90), -0.5 * M_PI, 0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
 
