@@ -68,6 +68,8 @@ void PlantArchitecture::initializePlantModelRegistrations() {
 
     registerPlantModel("grapevine_Wye", [this]() { initializeGrapevineWyeShoots(); }, [this](const helios::vec3 &pos) { return buildGrapevineWye(pos); });
 
+    registerPlantModel("grapevine_XShape", [this]() { initializeGrapevineXShapeShoots(); }, [this](const helios::vec3 &pos) { return buildGrapevineXShape(pos); });
+
     registerPlantModel("grapevine_Pergola", [this]() { initializeGrapevinePergolaShoots(); }, [this](const helios::vec3 &pos) { return buildGrapevinePergola(pos); });
 
     registerPlantModel("groundcherryweed", [this]() { initializeGroundCherryWeedShoots(); }, [this](const helios::vec3 &pos) { return buildGroundCherryWeedPlant(pos); }, "weed");
@@ -2433,6 +2435,160 @@ uint PlantArchitecture::buildGrapevineWye(const helios::vec3 &base_position) {
 
     setPlantPhenologicalThresholds(plantID, 165, -1, -1, 45, 45, 200, false);
 
+    plant_instances.at(plantID).max_age = 365;
+
+    return plantID;
+}
+
+// ==============================
+// X-Shape (X字仕立て: Y字 + 下2本アーム)
+// ==============================
+
+void PlantArchitecture::initializeGrapevineXShapeShoots() {
+    // X-shape uses the same shoot types as Wye
+    initializeGrapevineWyeShoots();
+}
+
+uint PlantArchitecture::buildGrapevineXShape(const helios::vec3 &base_position) {
+
+    if (shoot_types.empty()) {
+        initializeGrapevineXShapeShoots();
+    }
+
+    // Get training system parameters
+    auto trunk_height_total = getParameterValue(current_build_parameters, "trunk_height", 0.9f, 0.05f, 2.f, "total trunk height in meters");
+    auto cordon_spacing = getParameterValue(current_build_parameters, "cordon_spacing", 1.2f, 0.4f, 3.f, "total arm spread at tips in meters");
+    auto vine_spacing = getParameterValue(current_build_parameters, "vine_spacing", 1.8f, 0.5f, 5.f, "plant-to-plant spacing in meters");
+    auto catch_wire_height = getParameterValue(current_build_parameters, "catch_wire_height", 2.1f, 0.5f, 4.f, "absolute height of upper catch wires in meters");
+    auto lower_arm_height = getParameterValue(current_build_parameters, "lower_arm_height", 0.3f, 0.05f, 1.5f, "absolute height of lower arm tips in meters");
+
+    // Wire level toggles: 1=on (default), 0=off
+    auto wire_level_upper = getParameterValue(current_build_parameters, "wire_level_upper", 1.f, 0.f, 1.f, "enable upper catch wires (0=off, 1=on)");
+    auto wire_level_lower = getParameterValue(current_build_parameters, "wire_level_lower", 1.f, 0.f, 1.f, "enable lower wires (0=off, 1=on)");
+
+    // Trunk — split into lower section (ground → fork) and upper conceptual origin
+    // Fork is at trunk_height_total
+    uint trunk_nodes = 20;
+    float trunk_internode_length = trunk_height_total / (float)trunk_nodes;
+
+    // Upper arm geometry (same as Wye)
+    float upper_head_height = catch_wire_height - 0.15f;
+    float upper_vertical_gap = upper_head_height - trunk_height_total;
+    if (upper_vertical_gap < 0.1f) upper_vertical_gap = 0.1f;
+    float arm_spread = 0.5f * cordon_spacing;
+    float upper_pitch_deg = atan2f(arm_spread, upper_vertical_gap) * 180.f / M_PI;
+    float upper_arm_length = sqrtf(upper_vertical_gap * upper_vertical_gap + arm_spread * arm_spread);
+    float upright_radius = 0.03f;
+    uint upper_arm_nodes = std::max(3u, (uint)ceilf(upper_arm_length / 0.15f));
+    float upper_internode_length = upper_arm_length / (float)upper_arm_nodes;
+
+    // Lower arm geometry — mirror of upper but going downward
+    float lower_vertical_gap = trunk_height_total - lower_arm_height;
+    if (lower_vertical_gap < 0.1f) lower_vertical_gap = 0.1f;
+    float lower_pitch_deg = atan2f(arm_spread, lower_vertical_gap) * 180.f / M_PI;
+    float lower_arm_length = sqrtf(lower_vertical_gap * lower_vertical_gap + arm_spread * arm_spread);
+    uint lower_arm_nodes = std::max(3u, (uint)ceilf(lower_arm_length / 0.15f));
+    float lower_internode_length = lower_arm_length / (float)lower_arm_nodes;
+
+    // Cordon parameters
+    uint cordon_nodes = 8;
+    float cordon_radius = 0.02f;
+    float cordon_length = 0.11f;
+
+    // --- Trellis attraction points ---
+    std::vector<std::vector<vec3>> trellis_points;
+    float half_x = 0.5f * vine_spacing;
+    float upper_catch_y = arm_spread + 0.15f;
+    float lower_wire_y = arm_spread + 0.15f;
+
+    // Upper wires (at catch_wire_height)
+    if (wire_level_upper > 0.5f) {
+        trellis_points.push_back(linspace(make_vec3(-half_x, -upper_catch_y, catch_wire_height),
+                                          make_vec3(half_x, -upper_catch_y, catch_wire_height), 8));
+        trellis_points.push_back(linspace(make_vec3(-half_x, upper_catch_y, catch_wire_height),
+                                          make_vec3(half_x, upper_catch_y, catch_wire_height), 8));
+    }
+
+    // Lower wires (at lower_arm_height)
+    if (wire_level_lower > 0.5f) {
+        trellis_points.push_back(linspace(make_vec3(-half_x, -lower_wire_y, lower_arm_height),
+                                          make_vec3(half_x, -lower_wire_y, lower_arm_height), 8));
+        trellis_points.push_back(linspace(make_vec3(-half_x, lower_wire_y, lower_arm_height),
+                                          make_vec3(half_x, lower_wire_y, lower_arm_height), 8));
+    }
+
+    for (int j = 0; j < trellis_points.size(); j++) {
+        for (int i = 0; i < trellis_points[j].size(); i++) {
+            trellis_points.at(j).at(i) += base_position;
+        }
+    }
+
+    uint plantID = addPlantInstance(base_position, 0);
+    setPlantAttractionPoints(plantID, flatten(trellis_points), 75.f, 1.0f, 1.0);
+
+    uint uID_stem = addBaseStemShoot(plantID, trunk_nodes, make_AxisRotation(0., 0, 0),
+        shoot_types.at("grapevine_trunk").phytomer_parameters.internode.radius_initial.val(),
+        trunk_internode_length, 1, 1, 0.1, "grapevine_trunk");
+
+    std::vector<uint> cordon_ids;
+    std::vector<uint> arm_segments;
+
+    // --- Upper arms (same as Wye, going upward-outward) ---
+    AxisRotation upper_arm_rot_L = make_AxisRotation(deg2rad(upper_pitch_deg), 0, M_PI);
+    AxisRotation upper_arm_rot_R = make_AxisRotation(deg2rad(upper_pitch_deg), M_PI, M_PI);
+    AxisRotation arm_cont = make_AxisRotation(0, 0, M_PI);
+
+    uint uID_upper_L = appendShoot(plantID, uID_stem, upper_arm_nodes, upper_arm_rot_L,
+        upright_radius, upper_internode_length, 1, 1, 0.2, "grapevine_trunk");
+    uint uID_upper_R = appendShoot(plantID, uID_stem, upper_arm_nodes, upper_arm_rot_R,
+        upright_radius, upper_internode_length, 1, 1, 0.2, "grapevine_trunk");
+    arm_segments.push_back(uID_upper_L);
+    arm_segments.push_back(uID_upper_R);
+
+    // Cordons at upper arm tips
+    if (wire_level_upper > 0.5f) {
+        uint cL1 = appendShoot(plantID, uID_upper_L, cordon_nodes, make_AxisRotation(deg2rad(-90), 0.5 * M_PI, -0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cL2 = appendShoot(plantID, uID_upper_L, cordon_nodes, make_AxisRotation(deg2rad(-90), -0.5 * M_PI, 0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cR1 = appendShoot(plantID, uID_upper_R, cordon_nodes, make_AxisRotation(deg2rad(-90), 0.5 * M_PI, 0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cR2 = appendShoot(plantID, uID_upper_R, cordon_nodes, make_AxisRotation(deg2rad(-90), -0.5 * M_PI, -0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        cordon_ids.insert(cordon_ids.end(), {cL1, cL2, cR1, cR2});
+    }
+
+    // --- Lower arms (going downward-outward from fork — the "下二本" of X-shape) ---
+    // Lower arms pitch angle: negative pitch = going downward
+    // We use (180 - pitch) to flip the arm downward while keeping the same spread
+    AxisRotation lower_arm_rot_L = make_AxisRotation(deg2rad(180.f - lower_pitch_deg), 0, M_PI);
+    AxisRotation lower_arm_rot_R = make_AxisRotation(deg2rad(180.f - lower_pitch_deg), M_PI, M_PI);
+
+    uint uID_lower_L = appendShoot(plantID, uID_stem, lower_arm_nodes, lower_arm_rot_L,
+        upright_radius, lower_internode_length, 1, 1, 0.2, "grapevine_trunk");
+    uint uID_lower_R = appendShoot(plantID, uID_stem, lower_arm_nodes, lower_arm_rot_R,
+        upright_radius, lower_internode_length, 1, 1, 0.2, "grapevine_trunk");
+    arm_segments.push_back(uID_lower_L);
+    arm_segments.push_back(uID_lower_R);
+
+    // Cordons at lower arm tips
+    if (wire_level_lower > 0.5f) {
+        uint cL1 = appendShoot(plantID, uID_lower_L, cordon_nodes, make_AxisRotation(deg2rad(-90), 0.5 * M_PI, -0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cL2 = appendShoot(plantID, uID_lower_L, cordon_nodes, make_AxisRotation(deg2rad(-90), -0.5 * M_PI, 0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cR1 = appendShoot(plantID, uID_lower_R, cordon_nodes, make_AxisRotation(deg2rad(-90), 0.5 * M_PI, 0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        uint cR2 = appendShoot(plantID, uID_lower_R, cordon_nodes, make_AxisRotation(deg2rad(-90), -0.5 * M_PI, -0.2), cordon_radius, cordon_length, 1, 1, 0.5, "grapevine_cordon");
+        cordon_ids.insert(cordon_ids.end(), {cL1, cL2, cR1, cR2});
+    }
+
+    // Remove leaves and vegetative buds from structural shoots
+    removeShootLeaves(plantID, uID_stem);
+    for (uint seg_id : arm_segments) {
+        removeShootLeaves(plantID, seg_id);
+    }
+    for (uint cid : cordon_ids) {
+        removeShootLeaves(plantID, cid);
+    }
+    for (uint seg_id : arm_segments) {
+        removeShootVegetativeBuds(plantID, seg_id);
+    }
+
+    setPlantPhenologicalThresholds(plantID, 165, -1, -1, 45, 45, 200, false);
     plant_instances.at(plantID).max_age = 365;
 
     return plantID;

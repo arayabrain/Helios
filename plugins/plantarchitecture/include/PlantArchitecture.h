@@ -3270,6 +3270,10 @@ protected:
 
     uint buildGrapevineWye(const helios::vec3 &base_position);
 
+    void initializeGrapevineXShapeShoots();
+
+    uint buildGrapevineXShape(const helios::vec3 &base_position);
+
     void initializeGrapevinePergolaShoots();
 
     uint buildGrapevinePergola(const helios::vec3 &base_position);
