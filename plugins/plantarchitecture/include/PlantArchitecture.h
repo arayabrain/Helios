@@ -3278,6 +3278,10 @@ protected:
 
     uint buildGrapevinePergola(const helios::vec3 &base_position);
 
+    void initializeGrapevineConfigurableShoots();
+
+    uint buildGrapevineConfigurable(const helios::vec3 &base_position);
+
     void initializeGroundCherryWeedShoots();
 
     uint buildGroundCherryWeedPlant(const helios::vec3 &base_position);
