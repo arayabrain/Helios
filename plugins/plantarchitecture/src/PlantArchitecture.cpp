@@ -1708,13 +1708,20 @@ Phytomer::Phytomer(const PhytomerParameters &params, Shoot *parent_shoot, uint p
         vec3 final_direction = internode_axis; // Start with current direction (includes hard obstacle avoidance if applied)
 
         if (attraction_active) {
-            // Always apply attraction points if they're found
+            // Use plant-specific attraction weighting when available so per-plant
+            // trellis guidance can tune the blend independently.
             float attraction_weight = plantarchitecture_ptr->attraction_weight;
+            float obstacle_reduction_factor = plantarchitecture_ptr->attraction_obstacle_reduction_factor;
+            auto plant_iter = plantarchitecture_ptr->plant_instances.find(plantID);
+            if (plant_iter != plantarchitecture_ptr->plant_instances.end() && plant_iter->second.attraction_points_enabled) {
+                attraction_weight = plant_iter->second.attraction_weight;
+                obstacle_reduction_factor = plant_iter->second.attraction_obstacle_reduction_factor;
+            }
 
             if (obstacle_found) {
                 // When hard obstacles are present, reduce attraction influence to allow obstacle avoidance
                 // but maintain some attraction to keep plant near surface
-                attraction_weight *= plantarchitecture_ptr->attraction_obstacle_reduction_factor; // Reduce attraction when avoiding hard obstacles
+                attraction_weight *= obstacle_reduction_factor; // Reduce attraction when avoiding hard obstacles
             }
 
             // Blend current direction (which may include obstacle avoidance) with attraction direction
