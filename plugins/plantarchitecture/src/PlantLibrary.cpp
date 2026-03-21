@@ -2795,7 +2795,22 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
     float cordon_radius = 0.02f;
     float cordon_internode_spacing = 0.12f;
 
+    float fork_cordon_sides = getParameterValue(current_build_parameters, "fork_cordon_sides", 0.f, 0.f, 2.f, "fork cordon sides (0=both, 1=left, 2=right)");
+    float global_cordon_sides = fork_cordon_sides;
+    for (int i = 0; i < arm_count && global_cordon_sides < 0.5f; i++) {
+        std::string prefix = "arm_" + std::to_string(i) + "_";
+        float arm_sides = getParameterValue(current_build_parameters, prefix + "sides", 0.f, 0.f, 2.f, "arm tip cordon side hint");
+        if (arm_sides > 0.5f) {
+            global_cordon_sides = arm_sides;
+        }
+    }
+
     // --- Trellis attraction points ---
+    // Wire extent passed from generate_configurable() — clamp attraction to this range.
+    // Values are in GLOBAL coordinates; convert to local (relative to base_position).
+    float wire_x_min_local = getParameterValue(current_build_parameters, "wire_x_min", -1e6f, -1e6f, 1e6f, "wire X min (global)") - base_position.x;
+    float wire_x_max_local = getParameterValue(current_build_parameters, "wire_x_max",  1e6f, -1e6f, 1e6f, "wire X max (global)") - base_position.x;
+
     std::vector<std::vector<vec3>> trellis_points;
 
     // Fork-level wire
@@ -2816,10 +2831,14 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
                                                   make_vec3(x, grid_extent, trunk_height_total), 8));
             }
         } else {
-            // 1D wire along X (Wye/XShape style)
-            float half_x = 0.5f * plant_spacing_x;
-            trellis_points.push_back(linspace(make_vec3(-half_x, 0, trunk_height_total),
-                                              make_vec3(half_x, 0, trunk_height_total), 8));
+            // 1D wire along X (Wye/XShape style) — clamped to trellis wire extent
+            float fork_start_x = std::max(-0.5f * plant_spacing_x, wire_x_min_local);
+            float fork_end_x   = std::min( 0.5f * plant_spacing_x, wire_x_max_local);
+            if (fork_start_x < fork_end_x) {
+                trellis_points.push_back(linspace(
+                    make_vec3(fork_start_x, 0, trunk_height_total),
+                    make_vec3(fork_end_x,   0, trunk_height_total), 8));
+            }
         }
     }
 
@@ -2858,29 +2877,41 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
         arms[i].wire_val = arm_wire_val;
         arms[i].cordon_length = arm_cordon_length;
 
-        // Wire attraction points at arm tips
+        // Wire attraction points at both arm tips — clamped to trellis wire extent
         if (arm_wire_val > 0.5f) {
             float margin = 0.15f;
             float wire_dx = sinf(cordon_axis_rad);
             float wire_dy = cosf(cordon_axis_rad);
             float half_extent = 0.5f * (fabsf(wire_dx) * plant_spacing_x + fabsf(wire_dy) * plant_spacing_y);
+            float Lz = trunk_height_total + arms[i].tip_dz;
+            auto make_wire_segment = [&](float anchor_x, float anchor_y) {
+                float sx = anchor_x - half_extent * wire_dx;
+                float ex = anchor_x + half_extent * wire_dx;
+                float sy = anchor_y - half_extent * wire_dy;
+                float ey = anchor_y + half_extent * wire_dy;
+                // Clamp X to trellis wire extent (local coords)
+                if (fabsf(wire_dx) > 1e-5f) {
+                    float t_min = (wire_x_min_local - anchor_x) / (half_extent * wire_dx);
+                    float t_max = (wire_x_max_local - anchor_x) / (half_extent * wire_dx);
+                    if (t_min > t_max) std::swap(t_min, t_max);
+                    t_min = std::max(t_min, -1.f);
+                    t_max = std::min(t_max,  1.f);
+                    if (t_min >= t_max) return; // no wire in range
+                    sx = anchor_x + t_min * half_extent * wire_dx;
+                    sy = anchor_y + t_min * half_extent * wire_dy;
+                    ex = anchor_x + t_max * half_extent * wire_dx;
+                    ey = anchor_y + t_max * half_extent * wire_dy;
+                }
+                trellis_points.push_back(linspace(make_vec3(sx, sy, Lz), make_vec3(ex, ey, Lz), 8));
+            };
 
-            // L arm wire position (arm tip + margin in spread direction)
             float Lx = arms[i].tip_dx + margin * sinf(az_rad);
             float Ly = arms[i].tip_dy + margin * cosf(az_rad);
-            float Lz = trunk_height_total + arms[i].tip_dz;
+            make_wire_segment(Lx, Ly);
 
-            trellis_points.push_back(linspace(
-                make_vec3(Lx - half_extent * wire_dx, Ly - half_extent * wire_dy, Lz),
-                make_vec3(Lx + half_extent * wire_dx, Ly + half_extent * wire_dy, Lz), 8));
-
-            // R arm wire position (mirror of L)
             float Rx = -arms[i].tip_dx - margin * sinf(az_rad);
             float Ry = -arms[i].tip_dy - margin * cosf(az_rad);
-
-            trellis_points.push_back(linspace(
-                make_vec3(Rx - half_extent * wire_dx, Ry - half_extent * wire_dy, Lz),
-                make_vec3(Rx + half_extent * wire_dx, Ry + half_extent * wire_dy, Lz), 8));
+            make_wire_segment(Rx, Ry);
         }
     }
 
@@ -2897,10 +2928,59 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
         shoot_types.at("grapevine_trunk").phytomer_parameters.internode.radius_initial.val(),
         trunk_internode_length, 1, 1, 0.1, "grapevine_trunk");
 
+    auto compute_cordon_end_x = [&](uint parent_shoot_id, const AxisRotation &cordon_rotation, float cordon_length_total) -> float {
+        auto &parent_shoot = plant_instances.at(plantID).shoot_tree.at(parent_shoot_id);
+        auto &parent_phytomer = parent_shoot->phytomers.back();
+
+        vec3 parent_internode_axis = parent_phytomer->getInternodeAxisVector(1.f);
+        vec3 parent_petiole_axis;
+        if (parent_phytomer->petiole_vertices.empty()) {
+            parent_petiole_axis = cross(parent_internode_axis, make_vec3(0, 0, 1));
+            if (parent_petiole_axis.magnitude() < 0.01f) {
+                parent_petiole_axis = make_vec3(0, 1, 0);
+            }
+            parent_petiole_axis.normalize();
+
+            uint parent_node_index = parent_shoot->phytomers.size() - 1;
+            float phyllotactic_angle = parent_phytomer->internode_phyllotactic_angle;
+            float cumulative_rotation = float(parent_node_index) * phyllotactic_angle;
+            parent_petiole_axis = rotatePointAboutLine(parent_petiole_axis, make_vec3(0, 0, 0), parent_internode_axis, cumulative_rotation);
+        } else {
+            parent_petiole_axis = parent_phytomer->getPetioleAxisVector(0.f, 0);
+        }
+
+        vec3 internode_axis = parent_internode_axis;
+        vec3 petiole_rotation_axis = cross(parent_internode_axis, parent_petiole_axis);
+        if (petiole_rotation_axis.magnitude() < 1e-5f) {
+            petiole_rotation_axis = make_vec3(1, 0, 0);
+        }
+
+        if (cordon_rotation.roll != 0.f) {
+            petiole_rotation_axis = rotatePointAboutLine(petiole_rotation_axis, make_vec3(0, 0, 0), parent_internode_axis, cordon_rotation.roll);
+            internode_axis = rotatePointAboutLine(internode_axis, make_vec3(0, 0, 0), parent_internode_axis, cordon_rotation.roll);
+        }
+
+        vec3 base_pitch_axis = -1.f * cross(parent_internode_axis, parent_petiole_axis);
+        if (cordon_rotation.pitch != 0.f) {
+            petiole_rotation_axis = rotatePointAboutLine(petiole_rotation_axis, make_vec3(0, 0, 0), base_pitch_axis, -cordon_rotation.pitch);
+            internode_axis = rotatePointAboutLine(internode_axis, make_vec3(0, 0, 0), base_pitch_axis, -cordon_rotation.pitch);
+        }
+
+        if (cordon_rotation.yaw != 0.f) {
+            petiole_rotation_axis = rotatePointAboutLine(petiole_rotation_axis, make_vec3(0, 0, 0), parent_internode_axis, cordon_rotation.yaw);
+            internode_axis = rotatePointAboutLine(internode_axis, make_vec3(0, 0, 0), parent_internode_axis, cordon_rotation.yaw);
+        }
+
+        internode_axis.normalize();
+
+        vec3 append_base_position = interpolateTube(parent_phytomer->getInternodeNodePositions(), 0.9f);
+        return append_base_position.x + cordon_length_total * internode_axis.x;
+    };
+
     std::vector<uint> cordon_ids;
     std::vector<uint> arm_segments;
 
-    // --- Build arm shoots ---
+    // --- Build arm shoots (always symmetric; unilateral mode only limits the cordon side) ---
     for (int i = 0; i < arm_count; i++) {
         auto &arm = arms[i];
         uint arm_nodes = std::max(3u, (uint)ceilf(arm.length / 0.15f));
@@ -2923,23 +3003,78 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
             float c_az2 = arm.cordon_axis_rad + (float)M_PI;
             uint arm_cordon_nodes = std::max(3u, (uint)ceilf(arm.cordon_length / cordon_internode_spacing));
             float arm_cordon_internode = arm.cordon_length / (float)arm_cordon_nodes;
-            uint cL1 = appendShoot(plantID, uID_arm_L, arm_cordon_nodes, make_AxisRotation(deg2rad(-90), c_az1, -0.2), cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
-            uint cL2 = appendShoot(plantID, uID_arm_L, arm_cordon_nodes, make_AxisRotation(deg2rad(-90), c_az2, 0.2), cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
-            uint cR1 = appendShoot(plantID, uID_arm_R, arm_cordon_nodes, make_AxisRotation(deg2rad(-90), c_az1, 0.2), cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
-            uint cR2 = appendShoot(plantID, uID_arm_R, arm_cordon_nodes, make_AxisRotation(deg2rad(-90), c_az2, -0.2), cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
-            cordon_ids.insert(cordon_ids.end(), {cL1, cL2, cR1, cR2});
+            bool unilateral = global_cordon_sides > 0.5f;
+            bool want_positive_x = global_cordon_sides < 1.5f;
+            AxisRotation rot_cL1 = make_AxisRotation(deg2rad(-90), c_az1, -0.2f);
+            AxisRotation rot_cL2 = make_AxisRotation(deg2rad(-90), c_az2, 0.2f);
+            AxisRotation rot_cR1 = make_AxisRotation(deg2rad(-90), c_az1, 0.2f);
+            AxisRotation rot_cR2 = make_AxisRotation(deg2rad(-90), c_az2, -0.2f);
+
+            float xL1 = compute_cordon_end_x(uID_arm_L, rot_cL1, arm.cordon_length);
+            float xL2 = compute_cordon_end_x(uID_arm_L, rot_cL2, arm.cordon_length);
+            bool generate_L1 = true;
+            bool generate_L2 = true;
+            if (unilateral) {
+                generate_L1 = want_positive_x ? (xL1 >= xL2) : (xL1 <= xL2);
+                generate_L2 = !generate_L1;
+            }
+
+            if (generate_L1) {
+                uint cL1 = appendShoot(plantID, uID_arm_L, arm_cordon_nodes, rot_cL1, cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
+                cordon_ids.push_back(cL1);
+            }
+            if (generate_L2) {
+                uint cL2 = appendShoot(plantID, uID_arm_L, arm_cordon_nodes, rot_cL2, cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
+                cordon_ids.push_back(cL2);
+            }
+
+            float xR1 = compute_cordon_end_x(uID_arm_R, rot_cR1, arm.cordon_length);
+            float xR2 = compute_cordon_end_x(uID_arm_R, rot_cR2, arm.cordon_length);
+            bool generate_R1 = true;
+            bool generate_R2 = true;
+            if (unilateral) {
+                generate_R1 = want_positive_x ? (xR1 >= xR2) : (xR1 <= xR2);
+                generate_R2 = !generate_R1;
+            }
+
+            if (generate_R1) {
+                uint cR1 = appendShoot(plantID, uID_arm_R, arm_cordon_nodes, rot_cR1, cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
+                cordon_ids.push_back(cR1);
+            }
+            if (generate_R2) {
+                uint cR2 = appendShoot(plantID, uID_arm_R, arm_cordon_nodes, rot_cR2, cordon_radius, arm_cordon_internode, 1, 1, 0.5, "grapevine_cordon");
+                cordon_ids.push_back(cR2);
+            }
         }
     }
 
-    // Fork-level cordons at trunk tip
+    // Fork-level cordons at trunk tip. In unilateral mode, use the same global X side as the arm-tip cordons.
     if (fork_cordons > 0.5f) {
         uint fork_cordon_nodes = std::max(3u, (uint)ceilf(fork_cordon_length / cordon_internode_spacing));
         float fork_internode = fork_cordon_length / (float)fork_cordon_nodes;
-        // Distribute cordons equally around the trunk tip
+        // For 2 cordons, match the dedicated Wye/X-shape implementation:
+        // horizontal pair along the row direction (X axis). Higher counts
+        // keep the configurable radial distribution.
         for (int fc = 0; fc < fork_cordon_count; fc++) {
-            float az = (float)fc * 2.f * (float)M_PI / (float)fork_cordon_count;
+            AxisRotation fork_rotation =
+                (fork_cordon_count == 2)
+                    ? ((fc == 0)
+                        ? make_AxisRotation(deg2rad(-90), 0.5f * (float)M_PI, 0.f)
+                        : make_AxisRotation(deg2rad(-90), -0.5f * (float)M_PI, 0.f))
+                    : make_AxisRotation(deg2rad(90),
+                        (float)fc * 2.f * (float)M_PI / (float)fork_cordon_count, M_PI);
+
+            // Determine if this cordon should be generated based on the shared cordon side
+            bool generate = true;
+            if (global_cordon_sides > 0.5f) { // not "both"
+                bool want_positive_x = global_cordon_sides < 1.5f;
+                float x_end = compute_cordon_end_x(uID_stem, fork_rotation, fork_cordon_length);
+                generate = want_positive_x ? (x_end >= base_position.x) : (x_end <= base_position.x);
+            }
+            if (!generate) continue;
+
             uint cF = appendShoot(plantID, uID_stem, fork_cordon_nodes,
-                make_AxisRotation(deg2rad(90), az, M_PI),
+                fork_rotation,
                 cordon_radius, fork_internode, 1, 1, 0.5, "grapevine_cordon");
             cordon_ids.push_back(cF);
         }
