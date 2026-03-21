@@ -2787,13 +2787,20 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
     int fork_cordon_count = (int)getParameterValue(current_build_parameters, "fork_cordon_count", 2.f, 0.f, 8.f, "number of fork-level cordons (2 or 4)");
     auto fork_cordon_length = getParameterValue(current_build_parameters, "fork_cordon_length", 0.9f, 0.05f, 3.f, "fork cordon length in meters");
 
+    // Attraction point parameters
+    auto attract_view_angle = getParameterValue(current_build_parameters, "attract_view_angle", 75.f, 1.f, 180.f, "attraction view half-angle (degrees)");
+    auto attract_look_ahead = getParameterValue(current_build_parameters, "attract_look_ahead", 1.0f, 0.01f, 10.f, "attraction look-ahead distance (m)");
+    auto attract_weight = getParameterValue(current_build_parameters, "attract_weight", 1.0f, 0.f, 10.f, "attraction weight");
+    int attract_point_density = (int)getParameterValue(current_build_parameters, "attract_point_density", 8.f, 2.f, 50.f, "points per wire segment");
+
     // Trunk
-    uint trunk_nodes = 20;
+    auto trunk_il = getParameterValue(current_build_parameters, "trunk_internode_length", 0.035f, 0.005f, 0.2f, "trunk internode length (m)");
+    uint trunk_nodes = std::max(3u, (uint)ceilf(trunk_height_total / trunk_il));
     float trunk_internode_length = trunk_height_total / (float)trunk_nodes;
 
     // Cordon parameters (shared)
-    float cordon_radius = 0.02f;
-    float cordon_internode_spacing = 0.12f;
+    float cordon_radius = getParameterValue(current_build_parameters, "cordon_radius", 0.02f, 0.001f, 0.1f, "cordon radius (m)");
+    float cordon_internode_spacing = getParameterValue(current_build_parameters, "cordon_internode_spacing", 0.12f, 0.01f, 0.5f, "cordon internode spacing (m)");
 
     float fork_cordon_sides = getParameterValue(current_build_parameters, "fork_cordon_sides", 0.f, 0.f, 2.f, "fork cordon sides (0=both, 1=left, 2=right)");
     float global_cordon_sides = fork_cordon_sides;
@@ -2823,12 +2830,12 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
             for (int iw = 0; iw < n_wires; iw++) {
                 float y = -grid_extent + iw * wire_spacing;
                 trellis_points.push_back(linspace(make_vec3(-grid_extent, y, trunk_height_total),
-                                                  make_vec3(grid_extent, y, trunk_height_total), 8));
+                                                  make_vec3(grid_extent, y, trunk_height_total), attract_point_density));
             }
             for (int iw = 0; iw < n_wires; iw++) {
                 float x = -grid_extent + iw * wire_spacing;
                 trellis_points.push_back(linspace(make_vec3(x, -grid_extent, trunk_height_total),
-                                                  make_vec3(x, grid_extent, trunk_height_total), 8));
+                                                  make_vec3(x, grid_extent, trunk_height_total), attract_point_density));
             }
         } else {
             // 1D wire along X (Wye/XShape style) — clamped to trellis wire extent
@@ -2837,7 +2844,7 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
             if (fork_start_x < fork_end_x) {
                 trellis_points.push_back(linspace(
                     make_vec3(fork_start_x, 0, trunk_height_total),
-                    make_vec3(fork_end_x,   0, trunk_height_total), 8));
+                    make_vec3(fork_end_x,   0, trunk_height_total), attract_point_density));
             }
         }
     }
@@ -2921,7 +2928,7 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
                         ex = anchor_x + t_max * half_extent * wire_dx;
                         ey = anchor_y + t_max * half_extent * wire_dy;
                     }
-                    trellis_points.push_back(linspace(make_vec3(sx, sy, wz), make_vec3(ex, ey, wz), 8));
+                    trellis_points.push_back(linspace(make_vec3(sx, sy, wz), make_vec3(ex, ey, wz), attract_point_density));
                 };
 
                 // +方向アーム先端
@@ -3112,7 +3119,7 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
     if (!trellis_points.empty()) {
         // Apply attraction after structural shoots are fixed so the trunk/cordons
         // follow explicit rotations while later shoots are still guided by wires.
-        setPlantAttractionPoints(plantID, flatten(trellis_points), 75.f, 1.0f, 1.0f);
+        setPlantAttractionPoints(plantID, flatten(trellis_points), attract_view_angle, attract_look_ahead, attract_weight);
     }
 
     setPlantPhenologicalThresholds(plantID, 165, -1, -1, 45, 45, 200, false);
