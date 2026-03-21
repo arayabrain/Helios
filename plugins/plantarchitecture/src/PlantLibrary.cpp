@@ -2846,9 +2846,11 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
     struct ArmInfo {
         float pitch_rad, az_rad, length;
         float tip_dx, tip_dy, tip_dz;
+        float endpoint_dx, endpoint_dy, endpoint_dz;
         float cordon_axis_rad;
         float cordons_val, wire_val;
         float cordon_length;
+        std::vector<float> wire_ratios;
     };
     std::vector<ArmInfo> arms(arm_count);
 
@@ -2872,46 +2874,61 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
         arms[i].tip_dx = arm_length * sinf(pitch_rad) * sinf(az_rad);
         arms[i].tip_dy = arm_length * sinf(pitch_rad) * cosf(az_rad);
         arms[i].tip_dz = arm_length * cosf(pitch_rad);
+
+        // サポート先端（Python から。未指定時 = コルドン先端）
+        arms[i].endpoint_dx = getParameterValue(current_build_parameters, prefix + "endpoint_dx", arms[i].tip_dx, -10.f, 10.f, "endpoint X offset");
+        arms[i].endpoint_dy = getParameterValue(current_build_parameters, prefix + "endpoint_dy", arms[i].tip_dy, -10.f, 10.f, "endpoint Y offset");
+        arms[i].endpoint_dz = getParameterValue(current_build_parameters, prefix + "endpoint_dz", arms[i].tip_dz, -10.f, 10.f, "endpoint Z offset");
+
+        // ワイヤー位置（0.0=分岐点, 1.0=endpoint）
+        int wire_ratio_count = (int)getParameterValue(current_build_parameters, prefix + "wire_ratio_count", 1.f, 0.f, 10.f, "wire ratio count");
+        for (int w = 0; w < wire_ratio_count; w++) {
+            float r = getParameterValue(current_build_parameters, prefix + "wire_ratio_" + std::to_string(w), 1.f, 0.f, 2.f, "wire ratio");
+            arms[i].wire_ratios.push_back(r);
+        }
+        if (arms[i].wire_ratios.empty()) arms[i].wire_ratios.push_back(1.f);
+
         arms[i].cordon_axis_rad = cordon_axis_rad;
         arms[i].cordons_val = arm_cordons_val;
         arms[i].wire_val = arm_wire_val;
         arms[i].cordon_length = arm_cordon_length;
 
-        // Wire attraction points at both arm tips — clamped to trellis wire extent
+        // Wire attraction points at each wire_ratio position — clamped to trellis wire extent
         if (arm_wire_val > 0.5f) {
-            float margin = 0.15f;
             float wire_dx = sinf(cordon_axis_rad);
             float wire_dy = cosf(cordon_axis_rad);
             float half_extent = 0.5f * (fabsf(wire_dx) * plant_spacing_x + fabsf(wire_dy) * plant_spacing_y);
-            float Lz = trunk_height_total + arms[i].tip_dz;
-            auto make_wire_segment = [&](float anchor_x, float anchor_y) {
-                float sx = anchor_x - half_extent * wire_dx;
-                float ex = anchor_x + half_extent * wire_dx;
-                float sy = anchor_y - half_extent * wire_dy;
-                float ey = anchor_y + half_extent * wire_dy;
-                // Clamp X to trellis wire extent (local coords)
-                if (fabsf(wire_dx) > 1e-5f) {
-                    float t_min = (wire_x_min_local - anchor_x) / (half_extent * wire_dx);
-                    float t_max = (wire_x_max_local - anchor_x) / (half_extent * wire_dx);
-                    if (t_min > t_max) std::swap(t_min, t_max);
-                    t_min = std::max(t_min, -1.f);
-                    t_max = std::min(t_max,  1.f);
-                    if (t_min >= t_max) return; // no wire in range
-                    sx = anchor_x + t_min * half_extent * wire_dx;
-                    sy = anchor_y + t_min * half_extent * wire_dy;
-                    ex = anchor_x + t_max * half_extent * wire_dx;
-                    ey = anchor_y + t_max * half_extent * wire_dy;
-                }
-                trellis_points.push_back(linspace(make_vec3(sx, sy, Lz), make_vec3(ex, ey, Lz), 8));
-            };
 
-            float Lx = arms[i].tip_dx + margin * sinf(az_rad);
-            float Ly = arms[i].tip_dy + margin * cosf(az_rad);
-            make_wire_segment(Lx, Ly);
+            for (float ratio : arms[i].wire_ratios) {
+                float wy = ratio * arms[i].endpoint_dy;
+                float wz = trunk_height_total + ratio * arms[i].endpoint_dz;
 
-            float Rx = -arms[i].tip_dx - margin * sinf(az_rad);
-            float Ry = -arms[i].tip_dy - margin * cosf(az_rad);
-            make_wire_segment(Rx, Ry);
+                auto make_wire_segment = [&](float anchor_x, float anchor_y) {
+                    float sx = anchor_x - half_extent * wire_dx;
+                    float ex = anchor_x + half_extent * wire_dx;
+                    float sy = anchor_y - half_extent * wire_dy;
+                    float ey = anchor_y + half_extent * wire_dy;
+                    // Clamp X to trellis wire extent (local coords)
+                    if (fabsf(wire_dx) > 1e-5f) {
+                        float t_min = (wire_x_min_local - anchor_x) / (half_extent * wire_dx);
+                        float t_max = (wire_x_max_local - anchor_x) / (half_extent * wire_dx);
+                        if (t_min > t_max) std::swap(t_min, t_max);
+                        t_min = std::max(t_min, -1.f);
+                        t_max = std::min(t_max,  1.f);
+                        if (t_min >= t_max) return;
+                        sx = anchor_x + t_min * half_extent * wire_dx;
+                        sy = anchor_y + t_min * half_extent * wire_dy;
+                        ex = anchor_x + t_max * half_extent * wire_dx;
+                        ey = anchor_y + t_max * half_extent * wire_dy;
+                    }
+                    trellis_points.push_back(linspace(make_vec3(sx, sy, wz), make_vec3(ex, ey, wz), 8));
+                };
+
+                // +方向アーム先端
+                make_wire_segment(ratio * arms[i].endpoint_dx, wy);
+                // -方向アーム先端（対称）
+                make_wire_segment(-ratio * arms[i].endpoint_dx, -wy);
+            }
         }
     }
 
