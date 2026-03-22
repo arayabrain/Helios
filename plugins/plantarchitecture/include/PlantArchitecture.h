@@ -2718,6 +2718,17 @@ public:
      */
     uint labelFruitBunchesForExport(uint plantID);
 
+    //! Get the parent internode base position for each fruit bunch
+    /**
+     * Iterates the shoot tree in the same order as labelFruitBunchesForExport()
+     * and returns a map from "fruit_bunch_XXXX" to the internode base position
+     * (the node on the shoot where the peduncle originates).
+     *
+     * \param[in] plantID ID of the plant instance.
+     * \return Map from bunch label to parent internode base position (world coords).
+     */
+    std::map<std::string, helios::vec3> getFruitBunchParentage(uint plantID) const;
+
     //! Assign a fruit count value for each shoot on a plant
     /**
      * \param[in] plantID ID of the plant instance.
