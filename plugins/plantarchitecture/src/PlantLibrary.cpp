@@ -2868,9 +2868,10 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
                                                   make_vec3(x, grid_extent, trunk_height_total), attract_point_density));
             }
         } else {
-            // 1D wire along X (Wye/XShape style) — clamped to trellis wire extent
-            float fork_start_x = std::max(-0.5f * plant_spacing_x, wire_x_min_local);
-            float fork_end_x   = std::min( 0.5f * plant_spacing_x, wire_x_max_local);
+            // 1D wire along X (Wye/XShape style) — use full trellis wire extent
+            // so that neighboring plants' wires are visible as attraction points
+            float fork_start_x = wire_x_min_local;
+            float fork_end_x   = wire_x_max_local;
             if (fork_start_x < fork_end_x) {
                 trellis_points.push_back(linspace(
                     make_vec3(fork_start_x, 0, trunk_height_total),
@@ -2930,11 +2931,15 @@ uint PlantArchitecture::buildGrapevineConfigurable(const helios::vec3 &base_posi
         arms[i].wire_val = arm_wire_val;
         arms[i].cordon_length = arm_cordon_length;
 
-        // Wire attraction points at each wire_ratio position — clamped to trellis wire extent
+        // Wire attraction points at each wire_ratio position — use full trellis wire extent
+        // so that neighboring plants' wires are visible as attraction points
         if (arm_wire_val > 0.5f) {
             float wire_dx = sinf(cordon_axis_rad);
             float wire_dy = cosf(cordon_axis_rad);
-            float half_extent = 0.5f * (fabsf(wire_dx) * plant_spacing_x + fabsf(wire_dy) * plant_spacing_y);
+            // Use full trellis extent instead of single plant spacing
+            float half_extent_x = (fabsf(wire_dx) > 1e-5f) ? std::max(fabsf(wire_x_min_local), fabsf(wire_x_max_local)) : 0.f;
+            float half_extent_y = 0.5f * fabsf(wire_dy) * plant_spacing_y;
+            float half_extent = half_extent_x + half_extent_y;
 
             for (float ratio : arms[i].wire_ratios) {
                 float wy = ratio * arms[i].endpoint_dy;
