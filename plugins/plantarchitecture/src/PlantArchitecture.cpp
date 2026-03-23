@@ -4573,13 +4573,13 @@ std::vector<uint> PlantArchitecture::getPlantFruitObjectIDs(uint plantID) const 
     return objIDs;
 }
 
-uint PlantArchitecture::labelFruitBunchesForExport(uint plantID) {
+uint PlantArchitecture::labelFruitBunchesForExport(uint plantID, uint start_index) {
     if (plant_instances.find(plantID) == plant_instances.end()) {
         helios_runtime_error("ERROR (PlantArchitecture::labelFruitBunchesForExport): Plant with ID of " + std::to_string(plantID) + " does not exist.");
     }
 
     auto &shoot_tree = plant_instances.at(plantID).shoot_tree;
-    uint bunch_idx = 0;
+    uint bunch_idx = start_index;
 
     for (auto &shoot : shoot_tree) {
         for (auto &phytomer : shoot->phytomers) {
@@ -4603,14 +4603,14 @@ uint PlantArchitecture::labelFruitBunchesForExport(uint plantID) {
     return bunch_idx;
 }
 
-std::map<std::string, helios::vec3> PlantArchitecture::getFruitBunchParentage(uint plantID) const {
+std::map<std::string, helios::vec3> PlantArchitecture::getFruitBunchParentage(uint plantID, uint start_index) const {
     if (plant_instances.find(plantID) == plant_instances.end()) {
         helios_runtime_error("ERROR (PlantArchitecture::getFruitBunchParentage): Plant with ID of " + std::to_string(plantID) + " does not exist.");
     }
 
     auto &shoot_tree = plant_instances.at(plantID).shoot_tree;
     std::map<std::string, vec3> result;
-    uint bunch_idx = 0;
+    uint bunch_idx = start_index;
 
     for (const auto &shoot : shoot_tree) {
         for (const auto &phytomer : shoot->phytomers) {

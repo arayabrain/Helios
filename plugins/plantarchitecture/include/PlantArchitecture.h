@@ -2716,7 +2716,7 @@ public:
      * \param[in] plantID ID of the plant instance.
      * \return Number of bunches labeled.
      */
-    uint labelFruitBunchesForExport(uint plantID);
+    uint labelFruitBunchesForExport(uint plantID, uint start_index = 0);
 
     //! Get the parent internode base position for each fruit bunch
     /**
@@ -2727,7 +2727,7 @@ public:
      * \param[in] plantID ID of the plant instance.
      * \return Map from bunch label to parent internode base position (world coords).
      */
-    std::map<std::string, helios::vec3> getFruitBunchParentage(uint plantID) const;
+    std::map<std::string, helios::vec3> getFruitBunchParentage(uint plantID, uint start_index = 0) const;
 
     //! Assign a fruit count value for each shoot on a plant
     /**
